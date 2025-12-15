@@ -1,0 +1,124 @@
+<Window
+    x:Class="SchedulingApp.Views.Dialogs.ShiftEditDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:converters="clr-namespace:SchedulingApp.Converters"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:hc="https://handyorg.github.io/handycontrol"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:viewmodels="clr-namespace:SchedulingApp.ViewModels"
+    Title="{Binding Title}"
+    Width="400"
+    Height="580"
+    d:DataContext="{d:DesignInstance Type=viewmodels:ShiftEditDialogViewModel}"
+    ResizeMode="CanResize"
+    WindowStartupLocation="CenterScreen"
+    mc:Ignorable="d">
+    <Window.Resources>
+        <converters:TimeSpanToDateTimeConverter x:Key="TimeSpanToDateTimeConverter" />
+        <converters:ColorConverter x:Key="ColorConverter" />
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ScrollViewer
+            Grid.Row="0"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            HorizontalScrollBarVisibility="Disabled"
+            VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="15" Orientation="Vertical">
+
+                <StackPanel Margin="0,0,0,10" Orientation="Horizontal">
+                    <Label
+                        Width="80"
+                        VerticalAlignment="Center"
+                        Content="班次名称:" />
+                    <TextBox
+                        Height="25"
+                        MinWidth="200"
+                        Margin="5,0,0,0"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Center"
+                        Text="{Binding ShiftName, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+
+                <StackPanel Margin="0,0,0,10" Orientation="Horizontal">
+                    <Label
+                        Width="80"
+                        VerticalAlignment="Center"
+                        Content="开始时间:" />
+                    <hc:TimePicker
+                        Height="25"
+                        MinWidth="200"
+                        Margin="5,0,0,0"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Center"
+                        SelectedTime="{Binding SelectedStartTime, UpdateSourceTrigger=PropertyChanged, Converter={StaticResource TimeSpanToDateTimeConverter}}"
+                        Style="{StaticResource TimePickerPlus}">
+                        <hc:TimePicker.Clock>
+                            <hc:ListClock />
+                        </hc:TimePicker.Clock>
+                    </hc:TimePicker>
+                </StackPanel>
+
+                <StackPanel Margin="0,0,0,10" Orientation="Horizontal">
+                    <Label
+                        Width="80"
+                        VerticalAlignment="Center"
+                        Content="结束时间:" />
+                    <hc:TimePicker
+                        Height="25"
+                        MinWidth="200"
+                        Margin="5,0,0,0"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Center"
+                        SelectedTime="{Binding SelectedEndTime, UpdateSourceTrigger=PropertyChanged, Converter={StaticResource TimeSpanToDateTimeConverter}}"
+                        Style="{StaticResource TimePickerPlus}">
+                        <hc:TimePicker.Clock>
+                            <hc:ListClock />
+                        </hc:TimePicker.Clock>
+                    </hc:TimePicker>
+                </StackPanel>
+
+                <StackPanel Margin="0,0,0,10" Orientation="Horizontal">
+                    <Label
+                        Width="80"
+                        VerticalAlignment="Center"
+                        Content="颜色:" />
+                    <hc:ColorPicker
+                        x:Name="ColorPicker"
+                        Width="200"
+                        Margin="5,0,0,0"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Center"
+                        SelectedBrush="{Binding Color, UpdateSourceTrigger=PropertyChanged, Converter={StaticResource ColorConverter}}"
+                        SelectedColorChanged="ColorPicker_SelectedColorChanged" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel
+            Grid.Row="1"
+            Margin="15,10"
+            HorizontalAlignment="Right"
+            Orientation="Horizontal">
+            <Button
+                Width="75"
+                Height="30"
+                Margin="0,0,10,0"
+                Command="{Binding ConfirmCommand}"
+                Content="确定"
+                IsDefault="True" />
+            <Button
+                Width="75"
+                Height="30"
+                Command="{Binding CancelCommand}"
+                Content="取消"
+                IsCancel="True" />
+        </StackPanel>
+    </Grid>
+</Window>
