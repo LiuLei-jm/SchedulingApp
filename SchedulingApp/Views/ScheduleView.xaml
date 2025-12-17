@@ -82,6 +82,11 @@
                             Content="生成排班表" />
                         <Button
                             Width="110"
+                            Command="{Binding UploadScheduleCommand}"
+                            Content="上传排班表"
+                            IsEnabled="{Binding CanUpload}" />
+                        <Button
+                            Width="110"
                             Command="{Binding ExportScheduleCommand}"
                             Content="导出排班表"
                             IsEnabled="{Binding CanExport}" />

@@ -89,5 +89,100 @@ namespace SchedulingApp.Services.Implementations
 
             workbook.SaveAs(filePath);
         }
+
+        public Dictionary<string, List<ScheduleExportModel>> ImportScheduleFromExcel(string filePath)
+        {
+            var schedule = new Dictionary<string, List<ScheduleExportModel>>();
+
+            try
+            {
+                using var workbook = new XLWorkbook(filePath);
+                var worksheet = workbook.Worksheet(1); // Use the first worksheet
+
+                if (worksheet == null)
+                    return schedule;
+
+                int rowCount = worksheet.RowsUsed().Count();
+                int colCount = worksheet.ColumnsUsed().Count();
+
+                if (rowCount < 2 || colCount < 4)
+                    return schedule; // Not enough data
+
+                // Read headers (row 1) to identify dates
+                var dateHeaders = new List<string>();
+                for (int col = 4; col <= colCount; col++) // Start from column 4 (D)
+                {
+                    var cell = worksheet.Cell(1, col);
+                    var headerValue = cell.Value.ToString();
+                    if (!string.IsNullOrEmpty(headerValue))
+                    {
+                        // Convert MM-dd format to yyyy-MM-dd format
+                        if (DateTime.TryParseExact(headerValue, "MM-dd", null, System.Globalization.DateTimeStyles.None, out DateTime date))
+                        {
+                            // We need to determine the year. For now, assume current year if date is reasonable
+                            var currentDate = DateTime.Now;
+                            var dateWithYear = new DateTime(currentDate.Year, date.Month, date.Day);
+
+                            dateHeaders.Add(dateWithYear.ToString("yyyy-MM-dd"));
+                        }
+                        else
+                        {
+                            dateHeaders.Add(headerValue); // Keep as is if not a valid date
+                        }
+                    }
+                    else
+                    {
+                        dateHeaders.Add(string.Empty);
+                    }
+                }
+
+                // Process data rows (start from row 2)
+                for (int row = 2; row <= rowCount; row++)
+                {
+                    var nameCell = worksheet.Cell(row, 1);
+                    var name = nameCell.Value.ToString();
+                    var idCell = worksheet.Cell(row, 2);
+                    var id = idCell.Value.ToString();
+                    var groupCell = worksheet.Cell(row, 3);
+                    var group = groupCell.Value.ToString();
+
+                    if (string.IsNullOrEmpty(name))
+                        continue; // Skip empty rows
+
+                    // Process each date column
+                    for (int colIndex = 0; colIndex < dateHeaders.Count; colIndex++)
+                    {
+                        var dateStr = dateHeaders[colIndex];
+                        if (string.IsNullOrEmpty(dateStr))
+                            continue;
+
+                        var shiftCell = worksheet.Cell(row, colIndex + 4);
+                        var shiftValue = shiftCell.Value.ToString();
+
+                        // Ensure the date key exists in the dictionary
+                        if (!schedule.ContainsKey(dateStr))
+                        {
+                            schedule[dateStr] = new List<ScheduleExportModel>();
+                        }
+
+                        // Add the schedule entry
+                        schedule[dateStr].Add(new ScheduleExportModel
+                        {
+                            Name = name,
+                            Id = id,
+                            Group = group,
+                            ShiftType = shiftValue
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"导入Excel文件失败: {ex.Message}");
+                return new Dictionary<string, List<ScheduleExportModel>>(); // Return empty on error
+            }
+
+            return schedule;
+        }
     }
 }

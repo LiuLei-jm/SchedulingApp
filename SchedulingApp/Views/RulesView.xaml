@@ -315,7 +315,7 @@
                                         <DataGrid
                                             x:Name="WeekdayShiftsDataGrid"
                                             Grid.Row="0"
-                                            Height="120"
+                                            MinHeight="120"
                                             hc:DataGridAttach.ShowRowNumber="True"
                                             AutoGenerateColumns="False"
                                             BorderBrush="{DynamicResource BorderBrush}"
@@ -394,7 +394,7 @@
                                         <DataGrid
                                             x:Name="HolidayShiftsDataGrid"
                                             Grid.Row="0"
-                                            Height="120"
+                                            MinHeight="120"
                                             hc:DataGridAttach.ShowRowNumber="True"
                                             AutoGenerateColumns="False"
                                             BorderBrush="{DynamicResource BorderBrush}"
@@ -483,7 +483,8 @@
                                                 Header="可用员工">
                                                 <DataGrid
                                                     x:Name="AvailableStaffDataGrid"
-                                                    Height="330"
+                                                    MinHeight="330"
+                                                    MaxHeight="600"
                                                     hc:DataGridAttach.ShowRowNumber="True"
                                                     AutoGenerateColumns="False"
                                                     BorderBrush="{DynamicResource BorderBrush}"
@@ -528,7 +529,8 @@
                                                 Header="已选员工">
                                                 <DataGrid
                                                     x:Name="SelectedStaffDataGrid"
-                                                    Height="330"
+                                                    MinHeight="330"
+                                                    MaxHeight="600"
                                                     hc:DataGridAttach.ShowRowNumber="True"
                                                     AutoGenerateColumns="False"
                                                     BorderBrush="{DynamicResource BorderBrush}"
