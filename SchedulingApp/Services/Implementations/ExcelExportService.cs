@@ -1,7 +1,6 @@
 using ClosedXML.Excel;
 using SchedulingApp.Models;
 using SchedulingApp.Services.Interfaces;
-using System.Text.Json;
 
 namespace SchedulingApp.Services.Implementations
 {

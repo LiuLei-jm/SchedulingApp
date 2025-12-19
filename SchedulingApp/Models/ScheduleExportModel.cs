@@ -1,5 +1,3 @@
-using CommunityToolkit.Mvvm.ComponentModel;
-
 namespace SchedulingApp.Models
 {
     public class ScheduleExportModel

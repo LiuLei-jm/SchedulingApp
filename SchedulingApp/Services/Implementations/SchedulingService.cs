@@ -8,9 +8,6 @@ namespace SchedulingApp.Services.Implementations
     {
         public string StaffName { get; set; } = string.Empty;
         public Dictionary<string, double> ShiftCounts { get; set; } = [];
-        public double TotalShiftDays { get; set; }
-        public double TotalWorkDays { get; set; }
-        public double TotalRestDays { get; set; }
     }
 
     public class DailyStatistics
@@ -190,38 +187,20 @@ namespace SchedulingApp.Services.Implementations
             return existingSchedule;
         }
 
-        private void ProcessShiftsByRulesPriority(Dictionary<string, ScheduleDataModel> scheduleData,
-            List<DateTime> dateRange, List<StaffModel> staff, List<ShiftModel> shifts, RulesModel rules,
-            Dictionary<string, Dictionary<string, string>> existingSchedule)
-        {
-            // Process scheduling rules from the new SchedulingRules collection if available
-            if (rules.SchedulingRules != null && rules.SchedulingRules.Count > 0)
-            {
-                // Process each scheduling rule independently
-                foreach (var schedulingRule in rules.SchedulingRules)
-                {
-                    ProcessSchedulingRuleWithFullRequirements(scheduleData, dateRange, staff, shifts, rules, schedulingRule, existingSchedule);
-                }
-            }
-            else
-            {
-                // Fallback to old weekday/holiday rules if new rules aren't available
-                ProcessOldStyleRules(scheduleData, dateRange, staff, shifts, rules, existingSchedule);
-            }
-        }
 
         private void ProcessSchedulingRuleWithFullRequirements(Dictionary<string, ScheduleDataModel> scheduleData,
             List<DateTime> dateRange, List<StaffModel> staffs, List<ShiftModel> shifts,
             RulesModel rules, SchedulingRuleModel schedulingRule,
             Dictionary<string, Dictionary<string, string>> existingSchedule)
         {
+
+            Dictionary<string, StaffStatistics> staffStats = [];
+            Dictionary<string, DailyStatistics> dailyStats = [];
+
             var applicableStaff = schedulingRule.ApplicableStaff?.Any() == true
                 ? staffs.Where(s => schedulingRule.ApplicableStaff.Contains(s.Name)).ToList()
                 : staffs.ToList();
 
-            // Initialize statistics tracking for this rule
-            var staffStats = new Dictionary<string, StaffStatistics>();
-            var dailyStats = new Dictionary<string, DailyStatistics>();
 
             foreach (var person in applicableStaff)
             {
@@ -229,9 +208,6 @@ namespace SchedulingApp.Services.Implementations
                 {
                     StaffName = person.Name,
                     ShiftCounts = new Dictionary<string, double>(),
-                    TotalShiftDays = 0,
-                    TotalWorkDays = 0,
-                    TotalRestDays = 0
                 };
 
                 // Initialize shift counts for each shift type
@@ -259,7 +235,26 @@ namespace SchedulingApp.Services.Implementations
                 }
             }
 
-            // Process each date independently per the requirement: each scheduling rule is independent
+            // FIRST LOOP: Process priority shifts to ensure exact required count (must achieve required count exactly)
+            ProcessPriorityShifts(scheduleData, dateRange, applicableStaff, shifts, rules, schedulingRule, existingSchedule, staffStats, dailyStats);
+
+            // SECOND LOOP: Ensure each employee's rest days equal Rules.TotalRestDays
+            ProcessRestDayAdjustments(scheduleData, dateRange, applicableStaff, shifts, rules, schedulingRule, existingSchedule, staffStats, dailyStats);
+
+            // THIRD LOOP: Fill remaining unassigned slots with non-priority shifts
+            ProcessNonPriorityShifts(scheduleData, dateRange, applicableStaff, shifts, rules, schedulingRule, existingSchedule, staffStats, dailyStats);
+
+            // Handle half-day shift consecutive arrangement for shifts like 甲2PLUS
+            HandleHalfDayShiftConsecutiveArrangement(scheduleData, dateRange, applicableStaff, shifts, rules);
+        }
+
+        private void ProcessPriorityShifts(Dictionary<string, ScheduleDataModel> scheduleData,
+            List<DateTime> dateRange, List<StaffModel> applicableStaff, List<ShiftModel> shifts,
+            RulesModel rules, SchedulingRuleModel schedulingRule,
+            Dictionary<string, Dictionary<string, string>> existingSchedule,
+            Dictionary<string, StaffStatistics> staffStats,
+            Dictionary<string, DailyStatistics> dailyStats)
+        {
             foreach (var date in dateRange)
             {
                 var dateStr = date.ToString("yyyy-MM-dd");
@@ -268,7 +263,6 @@ namespace SchedulingApp.Services.Implementations
                 // Get shift requirements based on whether it's a holiday or weekday
                 var shiftRequirements = isHoliday ? schedulingRule.HolidayShifts : schedulingRule.WeekdayShifts;
 
-                // Sort shifts by priority: priority shifts first (lower numbers = higher priority), null priorities come last
                 var sortedShiftRequirements = shiftRequirements
                     .OrderBy(req => req.Priority ?? int.MaxValue) // Null priorities come last
                     .ToList();
@@ -276,394 +270,455 @@ namespace SchedulingApp.Services.Implementations
                 var priorityShifts = sortedShiftRequirements.Where(req => req.Priority.HasValue).ToList();
                 var nonPriorityShifts = sortedShiftRequirements.Where(req => !req.Priority.HasValue).ToList();
 
-                // Step 1: Process priority shifts (must reach exact required count)
-                // These have higher priority numbers and must be satisfied exactly
+                priorityShifts.AddRange(nonPriorityShifts);
+
+                // Process each priority shift to ensure exact required count
                 foreach (var shiftRequirement in priorityShifts)
                 {
                     var shiftType = shiftRequirement.ShiftName;
                     var requiredCount = shiftRequirement.RequiredCount;
 
-                    // Create a list of eligible staff for this shift assignment
-                    var eligibleStaff = new List<StaffModel>();
-                    foreach (var person in applicableStaff)
+                    // If we need more assignments, assign them
+                    if (dailyStats[dateStr].ShiftCounts[shiftType] < requiredCount)
                     {
-                        var personName = person.Name;
-                        if (scheduleData[personName].Shifts[dateStr] == "" &&
-                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
+                        var needed = requiredCount - dailyStats[dateStr].ShiftCounts[shiftType];
+
+                        // Find unassigned staff who are eligible for this shift
+                        var unassignedEligibleStaff = new List<StaffModel>();
+                        foreach (var person in applicableStaff)
                         {
-                            eligibleStaff.Add(person);
-                        }
-                    }
-
-                    // Rotate staff to ensure fair distribution
-                    var rotatedEligibleStaff = RotateStaffForFairDistribution(eligibleStaff, date);
-
-                    // Assign exactly the required count of this shift
-                    int assigned = 0;
-                    foreach (var person in rotatedEligibleStaff)
-                    {
-                        if (assigned >= requiredCount)
-                            break;
-
-                        var personName = person.Name;
-                        if (scheduleData[personName].Shifts[dateStr] == "" &&
-                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
-                        {
-                            // Perform assignment
-                            scheduleData[personName].Shifts[dateStr] = shiftType;
-
-                            // Update statistics
-                            UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, scheduleData, staffStats, dailyStats);
-                            assigned++;
-                        }
-                    }
-                }
-
-                // Step 2: Process non-priority shifts after priority shifts
-                foreach (var shiftRequirement in nonPriorityShifts)
-                {
-                    var shiftType = shiftRequirement.ShiftName;
-                    var requiredCount = shiftRequirement.RequiredCount;
-
-                    // Get unassigned staff who are eligible for this shift
-                    var remainingUnassigned = applicableStaff.Where(person =>
-                        scheduleData[person.Name].Shifts[dateStr] == "").ToList();
-
-                    var eligibleStaff = new List<StaffModel>();
-                    foreach (var person in remainingUnassigned)
-                    {
-                        var personName = person.Name;
-                        if (CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
-                        {
-                            eligibleStaff.Add(person);
-                        }
-                    }
-
-                    // Rotate staff for fair distribution
-                    var rotatedEligibleStaff = RotateStaffForFairDistribution(eligibleStaff, date);
-
-                    // Assign up to the required count (flexible assignment)
-                    int assigned = 0;
-                    foreach (var person in rotatedEligibleStaff)
-                    {
-                        if (assigned >= requiredCount)
-                            break;
-
-                        var personName = person.Name;
-                        if (scheduleData[personName].Shifts[dateStr] == "" &&
-                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
-                        {
-                            // Perform assignment
-                            scheduleData[personName].Shifts[dateStr] = shiftType;
-
-                            // Update statistics
-                            UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, scheduleData, staffStats, dailyStats);
-                            assigned++;
-                        }
-                    }
-                }
-
-                // Step 3: Assign non-priority shifts first, then rest days only up to TotalRestDays requirement
-                var stillUnassigned = applicableStaff.Where(person =>
-                    scheduleData[person.Name].Shifts[dateStr] == "").ToList();
-
-                // After priority assignments, only assign rest days up to TotalRestDays requirement
-                // and fill remaining slots with non-priority shifts
-                foreach (var person in stillUnassigned)
-                {
-                    var personName = person.Name;
-
-                    // Check if this person has reached their TotalRestDays requirement
-                    int currentRestDays = 0;
-                    foreach (var checkDate in dateRange)
-                    {
-                        var checkDateStr = checkDate.ToString("yyyy-MM-dd");
-                        if (scheduleData.ContainsKey(personName) &&
-                            scheduleData[personName].Shifts.ContainsKey(checkDateStr) &&
-                            scheduleData[personName].Shifts[checkDateStr] == "休息")
-                        {
-                            currentRestDays++;
-                        }
-                    }
-
-                    // Check if this person has already reached their TotalRestDays including existing schedule
-                    int existingRestDays = 0;
-                    if (existingSchedule.ContainsKey(personName))
-                    {
-                        foreach (var kvp in existingSchedule[personName])
-                        {
-                            if (kvp.Value == "休息")
+                            var personName = person.Name;
+                            if (scheduleData[personName].Shifts[dateStr] == "" &&
+                                CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
                             {
-                                existingRestDays++;
+                                unassignedEligibleStaff.Add(person);
                             }
                         }
-                    }
 
-                    // Check if we should assign rest or a non-priority shift based on TotalRestDays
-                    if (currentRestDays + existingRestDays < rules.TotalRestDays)
-                    {
-                        // Can assign a rest day
-                        scheduleData[personName].Shifts[dateStr] = "休息";
-                        UpdateStatisticsAfterAssignment(personName, "休息", dateStr, scheduleData, staffStats, dailyStats);
-                    }
-                    else
-                    {
-                        // Need to assign a non-priority shift instead of rest
-                        // First, find a non-priority shift that's still needed for this date
-                        bool shiftAssigned = false;
+                        // Rotate staff to ensure fair distribution
+                        var rotatedEligibleStaff = RotateStaffForFairDistribution(unassignedEligibleStaff, date);
 
-                        foreach (var shiftRequirement in nonPriorityShifts)
+                        // Assign the needed number of people to this shift
+                        int assigned = 0;
+                        foreach (var person in rotatedEligibleStaff)
                         {
-                            var shiftType = shiftRequirement.ShiftName;
-                            var requiredCount = shiftRequirement.RequiredCount;
+                            if (assigned >= needed) break;
 
-                            // Count how many people are already assigned this shift type for this date
-                            int currentAssignments = 0;
-                            foreach (var p in applicableStaff)
+                            var personName = person.Name;
+                            if (scheduleData[personName].Shifts[dateStr] == "" &&
+                                CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
                             {
-                                var pName = p.Name;
-                                if (scheduleData.ContainsKey(pName) &&
-                                    scheduleData[pName].Shifts.ContainsKey(dateStr) &&
-                                    scheduleData[pName].Shifts[dateStr] == shiftType)
-                                {
-                                    currentAssignments++;
-                                }
-                            }
-
-                            // If we need more of this shift and it's eligible for this person
-                            if (currentAssignments < requiredCount &&
-                                CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
-                            {
+                                // Perform assignment
                                 scheduleData[personName].Shifts[dateStr] = shiftType;
-                                UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, scheduleData, staffStats, dailyStats);
-                                shiftAssigned = true;
-                                break;
+
+                                if (rules.HalfDayShifts.Contains(shiftType))
+                                {
+                                    HalfdayShiftsAreArrangedContinuously(scheduleData, personName ,date, dateRange[^1], shiftType, shifts, rules, schedulingRule, existingSchedule);
+                                }
+
+                                // Update statistics
+                                UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, rules, scheduleData, staffStats, dailyStats);
+                                assigned++;
+                            }
+                            else
+                            {
+                                scheduleData[personName].Shifts[dateStr] = "休息";
                             }
                         }
+                    }
+                    // If we have MORE than required, we need to potentially remove some assignments
+                    else if (dailyStats[dateStr].ShiftCounts[shiftType] > requiredCount)
+                    {
+                        // This situation occurs when there are already more people assigned than needed
+                        // We need to find excess assignments and potentially remove them
+                        var excess = dailyStats[dateStr].ShiftCounts[shiftType] - requiredCount;
 
-                        // If no non-priority shift could be assigned, assign rest anyway (but this should be rare)
-                        if (!shiftAssigned)
+                        // Identify people currently assigned to this priority shift
+                        var assignedPeople = new List<StaffModel>();
+                        foreach (var person in applicableStaff)
                         {
-                            scheduleData[personName].Shifts[dateStr] = "休息";
-                            UpdateStatisticsAfterAssignment(personName, "休息", dateStr, scheduleData, staffStats, dailyStats);
+                            var personName = person.Name;
+                            if (scheduleData[personName].Shifts[dateStr] == shiftType)
+                            {
+                                assignedPeople.Add(person);
+                            }
+                        }
+                        foreach (var assigned in assignedPeople)
+                        {
+                            if (excess <= 0) break;
+                            scheduleData[assigned.Name].Shifts[dateStr] = "";
+                            excess--;
                         }
                     }
                 }
             }
-
-            // After all dates are processed, check TotalRestDays constraint
-            // This should be handled during assignment, but we'll make sure it's met
-            EnforceTotalRestDaysRequirement(scheduleData, dateRange, applicableStaff, rules, existingSchedule);
-
-            // Handle half-day shift consecutive arrangement for shifts like 甲2PLUS
-            HandleHalfDayShiftConsecutiveArrangement(scheduleData, dateRange, applicableStaff, shifts, rules);
         }
 
-        private void ProcessOldStyleRules(Dictionary<string, ScheduleDataModel> scheduleData,
-            List<DateTime> dateRange, List<StaffModel> staff, List<ShiftModel> shifts, RulesModel rules,
-            Dictionary<string, Dictionary<string, string>> existingSchedule)
+        private void HalfdayShiftsAreArrangedContinuously(Dictionary<string, ScheduleDataModel> scheduleData, string personName, DateTime date, DateTime endDate, string shiftType, List<ShiftModel> shifts, RulesModel rules, SchedulingRuleModel schedulingRule, Dictionary<string, Dictionary<string, string>> existionSchedule)
         {
-            // Initialize statistics tracking for old-style rules
-            var staffStats = new Dictionary<string, StaffStatistics>();
-            var dailyStats = new Dictionary<string, DailyStatistics>();
-
-            foreach (var person in staff)
+            var nextDate = date.AddDays(1);
+            while (nextDate < endDate)
             {
-                staffStats[person.Name] = new StaffStatistics
-                {
-                    StaffName = person.Name,
-                    ShiftCounts = new Dictionary<string, double>(),
-                    TotalShiftDays = 0,
-                    TotalWorkDays = 0,
-                    TotalRestDays = 0
-                };
+                var dateStr = nextDate.ToString("yyyy-MM-dd");
+                var isHoliday = IsHoliday(nextDate, rules);
 
-                // Initialize shift counts for each shift type
-                foreach (var shift in shifts)
+                // Get shift requirements based on whether it's a holiday or weekday
+                var shiftRequirements = isHoliday ? schedulingRule.HolidayShifts : schedulingRule.WeekdayShifts;
+                foreach (var shiftRequirement in shiftRequirements)
                 {
-                    staffStats[person.Name].ShiftCounts[shift.ShiftName] = 0;
+                    if (shiftRequirement.ShiftName == shiftType)
+                    {
+                        // Check if the next date is unassigned and can be assigned the same half-day shift
+                        if (scheduleData[personName].Shifts[dateStr] == "" &&
+                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, nextDate, scheduleData, shifts, rules, existionSchedule))
+                        {
+                            // Assign the same half-day shift to the next date
+                            scheduleData[personName].Shifts[dateStr] = shiftType;
+                            return;
+                        }
+                        else
+                        {
+                            // Stop if we encounter a date that cannot be assigned the same half-day shift
+                            break;
+                        }
+                    }
                 }
-                staffStats[person.Name].ShiftCounts["休息"] = 0;
+                nextDate = nextDate.AddDays(1);
             }
+        }
 
-            foreach (var date in dateRange)
-            {
-                var dateStr = date.ToString("yyyy-MM-dd");
-                dailyStats[dateStr] = new DailyStatistics
-                {
-                    Date = dateStr,
-                    ShiftCounts = new Dictionary<string, double>(),
-                    TotalAssigned = 0,
-                    TotalAvailable = staff.Count
-                };
-
-                // Initialize shift counts for each shift type
-                foreach (var shift in shifts)
-                {
-                    dailyStats[dateStr].ShiftCounts[shift.ShiftName] = 0;
-                }
-                dailyStats[dateStr].ShiftCounts["休息"] = 0;
-            }
-
-            // Process each date independently
+        private void ProcessNonPriorityShifts(Dictionary<string, ScheduleDataModel> scheduleData,
+            List<DateTime> dateRange, List<StaffModel> applicableStaff, List<ShiftModel> shifts,
+            RulesModel rules, SchedulingRuleModel schedulingRule,
+            Dictionary<string, Dictionary<string, string>> existingSchedule,
+            Dictionary<string, StaffStatistics> staffStats,
+            Dictionary<string, DailyStatistics> dailyStats)
+        {
+            // THIRD LOOP: Fill remaining unassigned slots with non-priority shifts
             foreach (var date in dateRange)
             {
                 var dateStr = date.ToString("yyyy-MM-dd");
                 var isHoliday = IsHoliday(date, rules);
 
                 // Get shift requirements based on whether it's a holiday or weekday
-                var shiftRequirements = isHoliday ? rules.Holiday : rules.Weekday;
+                var shiftRequirements = isHoliday ? schedulingRule.HolidayShifts : schedulingRule.WeekdayShifts;
 
-                // Sort shifts by priority (lower numbers = higher priority, null priorities come last and have lowest priority)
-                var sortedShiftRequirements = shiftRequirements
-                    .OrderBy(req => req.Priority ?? int.MaxValue) // Null priorities come last
-                    .ToList();
+                // Get only non-priority shifts (those without priority values)
+                var nonPriorityShifts = shiftRequirements.Where(req => !req.Priority.HasValue).ToList();
 
-                var priorityShifts = sortedShiftRequirements.Where(req => req.Priority.HasValue).ToList();
-                var nonPriorityShifts = sortedShiftRequirements.Where(req => !req.Priority.HasValue).ToList();
-
-                // Process priority shifts first (must reach exact required count)
-                foreach (var shiftRequirement in priorityShifts)
-                {
-                    var shiftType = shiftRequirement.ShiftName;
-                    var requiredCount = shiftRequirement.RequiredCount;
-
-                    // Create a list of eligible staff for this shift assignment
-                    var eligibleStaff = new List<StaffModel>();
-                    foreach (var person in staff)
-                    {
-                        var personName = person.Name;
-                        if (scheduleData[personName].Shifts[dateStr] == "" &&
-                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
-                        {
-                            eligibleStaff.Add(person);
-                        }
-                    }
-
-                    // Rotate staff to ensure fair distribution
-                    var rotatedEligibleStaff = RotateStaffForFairDistribution(eligibleStaff, date);
-
-                    // Assign exactly the required count of this shift
-                    int assigned = 0;
-                    foreach (var person in rotatedEligibleStaff)
-                    {
-                        if (assigned >= requiredCount)
-                            break;
-
-                        var personName = person.Name;
-                        if (scheduleData[personName].Shifts[dateStr] == "" &&
-                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
-                        {
-                            // Perform assignment
-                            scheduleData[personName].Shifts[dateStr] = shiftType;
-
-                            // Update statistics
-                            UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, scheduleData, staffStats, dailyStats);
-                            assigned++;
-                        }
-                    }
-                }
-
-                // Process non-priority shifts after priority shifts
+                // Process each non-priority shift to fill remaining unassigned slots first
                 foreach (var shiftRequirement in nonPriorityShifts)
                 {
                     var shiftType = shiftRequirement.ShiftName;
                     var requiredCount = shiftRequirement.RequiredCount;
 
-                    // Get unassigned staff who are eligible for this shift
-                    var remainingUnassigned = staff.Where(person =>
-                        scheduleData[person.Name].Shifts[dateStr] == "").ToList();
-
-                    var eligibleStaff = new List<StaffModel>();
-                    foreach (var person in remainingUnassigned)
+                    // Count how many are already assigned to this shift on this date
+                    int currentAssignments = 0;
+                    foreach (var person in applicableStaff)
                     {
                         var personName = person.Name;
-                        if (CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
+                        if (scheduleData[personName].Shifts[dateStr] == shiftType)
                         {
-                            eligibleStaff.Add(person);
+                            currentAssignments++;
                         }
                     }
 
-                    // Rotate staff for fair distribution
-                    var rotatedEligibleStaff = RotateStaffForFairDistribution(eligibleStaff, date);
-
-                    // Assign up to the required count (flexible assignment)
-                    int assigned = 0;
-                    foreach (var person in rotatedEligibleStaff)
+                    // If we still need more assignments to meet the requirement, assign them to unassigned staff
+                    if (currentAssignments < requiredCount)
                     {
-                        if (assigned >= requiredCount)
-                            break;
+                        var needed = requiredCount - currentAssignments;
 
-                        var personName = person.Name;
-                        if (scheduleData[personName].Shifts[dateStr] == "" &&
-                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
+                        // Find unassigned staff who are eligible for this shift (not currently assigned anything)
+                        var unassignedEligibleStaff = new List<StaffModel>();
+                        foreach (var person in applicableStaff)
                         {
-                            // Perform assignment
-                            scheduleData[personName].Shifts[dateStr] = shiftType;
+                            var personName = person.Name;
+                            if (scheduleData[personName].Shifts[dateStr] == "" &&
+                                CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
+                            {
+                                unassignedEligibleStaff.Add(person);
+                            }
+                        }
 
-                            // Update statistics
-                            UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, scheduleData, staffStats, dailyStats);
-                            assigned++;
+                        // Rotate staff to ensure fair distribution
+                        var rotatedEligibleStaff = RotateStaffForFairDistribution(unassignedEligibleStaff, date);
+
+                        // Assign up to the needed number of people to this shift
+                        int assigned = 0;
+                        foreach (var person in rotatedEligibleStaff)
+                        {
+                            if (assigned >= needed) break;
+
+                            var personName = person.Name;
+                            if (scheduleData[personName].Shifts[dateStr] == "" &&
+                                CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
+                            {
+                                // Perform assignment
+                                scheduleData[personName].Shifts[dateStr] = shiftType;
+
+                                // Update statistics
+                                UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, rules, scheduleData, staffStats, dailyStats);
+                                assigned++;
+                            }
                         }
                     }
                 }
 
-                // Assign rest days to any remaining unassigned staff
-                var stillUnassigned = staff.Where(person =>
+                // After all priority and non-priority shift requirements are met, fill any remaining unassigned slots
+                // with non-priority shifts to make sure everyone has an assignment
+                var stillUnassigned = applicableStaff.Where(person =>
                     scheduleData[person.Name].Shifts[dateStr] == "").ToList();
 
                 foreach (var person in stillUnassigned)
                 {
                     var personName = person.Name;
-                    scheduleData[personName].Shifts[dateStr] = "休息";
-                    UpdateStatisticsAfterAssignment(personName, "休息", dateStr, scheduleData, staffStats, dailyStats);
+
+                    // Try to assign non-priority shifts to fill remaining slots
+                    bool shiftAssigned = false;
+                    foreach (var shiftRequirement in nonPriorityShifts)
+                    {
+                        var shiftType = shiftRequirement.ShiftName;
+                        var requiredCount = shiftRequirement.RequiredCount;
+
+                        // Count current assignments for this shift type on this date
+                        int currentAssignments = 0;
+                        foreach (var p in applicableStaff)
+                        {
+                            if (scheduleData.ContainsKey(p.Name) &&
+                                scheduleData[p.Name].Shifts.ContainsKey(dateStr) &&
+                                scheduleData[p.Name].Shifts[dateStr] == shiftType)
+                            {
+                                currentAssignments++;
+                            }
+                        }
+
+                        // If we still have room for this shift and person can be assigned
+                        if (currentAssignments < requiredCount &&
+                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
+                        {
+                            scheduleData[personName].Shifts[dateStr] = shiftType;
+                            UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, rules, scheduleData, staffStats, dailyStats);
+                            shiftAssigned = true;
+                            break;
+                        }
+                    }
+
+                    // If no specific non-priority shift could be assigned, assign rest
+                    if (!shiftAssigned)
+                    {
+                        // However, we need to be careful here - if the employee already has enough rest days (TotalRestDays),
+                        // we shouldn't assign more rest days but rather try to find another shift
+                        int currentRestDays = 0;
+                        foreach (var checkDate in dateRange)
+                        {
+                            var checkDateStr = checkDate.ToString("yyyy-MM-dd");
+                            if (scheduleData.ContainsKey(personName) &&
+                                scheduleData[personName].Shifts.ContainsKey(checkDateStr) &&
+                                scheduleData[personName].Shifts[checkDateStr] == "休息")
+                            {
+                                currentRestDays++;
+                            }
+                        }
+
+                        // If employee already has enough rest days, try to assign a non-priority shift again
+                        if (currentRestDays >= rules.TotalRestDays)
+                        {
+                            // Try again to assign any non-priority shift (even if requirement is met) to avoid excessive rest
+                            foreach (var shiftRequirement in nonPriorityShifts)
+                            {
+                                var shiftType = shiftRequirement.ShiftName;
+
+                                if (CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
+                                {
+                                    scheduleData[personName].Shifts[dateStr] = shiftType;
+                                    UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, rules, scheduleData, staffStats, dailyStats);
+                                    shiftAssigned = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // If still no shift could be assigned, assign rest (but this should be rare)
+                        if (!shiftAssigned)
+                        {
+                            scheduleData[personName].Shifts[dateStr] = "休息";
+                            UpdateStatisticsAfterAssignment(personName, "休息", dateStr, rules, scheduleData, staffStats, dailyStats);
+                        }
+                    }
                 }
             }
-
-            // After all dates are processed, check TotalRestDays constraint
-            EnforceTotalRestDaysRequirement(scheduleData, dateRange, staff, rules, existingSchedule);
-
-            // Handle half-day shift consecutive arrangement for shifts like 甲2PLUS
-            HandleHalfDayShiftConsecutiveArrangement(scheduleData, dateRange, staff, shifts, rules);
         }
 
-        private void AssignExactShiftCount(Dictionary<string, ScheduleDataModel> scheduleData, DateTime date,
-            string shift, int requiredCount, List<StaffModel> availableStaff, List<ShiftModel> shifts, RulesModel rules)
+        private void ProcessRestDayAdjustments(Dictionary<string, ScheduleDataModel> scheduleData,
+            List<DateTime> dateRange, List<StaffModel> applicableStaff, List<ShiftModel> shifts,
+            RulesModel rules, SchedulingRuleModel schedulingRule,
+            Dictionary<string, Dictionary<string, string>> existingSchedule,
+            Dictionary<string, StaffStatistics> staffStats,
+            Dictionary<string, DailyStatistics> dailyStats
+            )
         {
-            var dateStr = date.ToString("yyyy-MM-dd");
-            var eligibleStaff = new List<StaffModel>();
+            var averageRestDays = (applicableStaff.Count * rules.TotalRestDays) / dateRange.Count;
 
-            // Find eligible staff for this shift who are not yet assigned for this date
-            foreach (var person in availableStaff)
+            // For each employee, ensure their total "rest day equivalents" equal Rules.TotalRestDays
+            // Where "休息" counts as 1.0 day and shifts in Rules.HalfDayShifts count as 0.5 days
+            foreach (var person in applicableStaff)
             {
                 var personName = person.Name;
 
-                // Check if this person is still unassigned for this date
-                if (scheduleData[personName].Shifts[dateStr] != "")
-                    continue;
+                // Calculate the current rest day equivalents for this employee during the schedule period
+                double currentRestDayEquivalents = 0.0;
 
-                // Apply constraints
-                if (CanAssignShiftWithConsecutiveCheck(personName, shift, date, scheduleData, shifts, rules))
+                foreach (var date in dateRange)
                 {
+                    var dateStr = date.ToString("yyyy-MM-dd");
+                    var shiftType = scheduleData[personName].Shifts[dateStr];
+
+                    if (shiftType == "休息")
+                    {
+                        currentRestDayEquivalents += 1.0;  // Full rest day
+                    }
+                    else if (rules.HalfDayShifts.Contains(shiftType))
+                    {
+                        currentRestDayEquivalents += 0.5;  // Half-day shift counts as 0.5 toward rest
+                    }
+                    // Regular work shifts don't contribute to rest day requirement
                 }
-            }
 
-            // Rotate staff to ensure fair distribution over time
-            // Use a simple rotation based on date to ensure different people get the priority shifts on different days
-            var rotatedEligibleStaff = RotateStaffForFairDistribution(eligibleStaff, date);
+                int targetRestDays = rules.TotalRestDays;
 
-            // Assign the required count of shifts
-            int assigned = 0;
-            foreach (var person in rotatedEligibleStaff)
-            {
-                if (assigned >= requiredCount)
-                    break;
+                // Calculate the difference needed to reach the target
+                double difference = targetRestDays - currentRestDayEquivalents;
 
-                // Double-check constraints before assignment
-                if (CanAssignShiftWithConsecutiveCheck(person.Name, shift, date, scheduleData, shifts, rules))
+                if (difference > 0)
                 {
-                    scheduleData[person.Name].Shifts[dateStr] = shift;
-                    assigned++;
+                    // Need more rest day equivalents (can be achieved by adding rest days)
+                    // We'll focus on converting only non-priority work days to rest days to preserve priority requirements
+                    int restDaysNeeded = (int)Math.Ceiling(difference); // Round up to ensure we meet the requirement
+
+                    // Convert some non-priority work days to rest days ("休息")
+                    int converted = 0;
+                    foreach (var date in dateRange)
+                    {
+                        if (converted >= restDaysNeeded) break;
+
+                        var dateStr = date.ToString("yyyy-MM-dd");
+                        var currentShift = scheduleData[personName].Shifts[dateStr];
+
+                        // Skip if already a rest day
+                        if (currentShift == "休息") continue;
+
+                        // Check if it's a priority shift to avoid disrupting priority requirements
+                        var isHoliday = IsHoliday(date, rules);
+                        var shiftRequirements = isHoliday ? schedulingRule.HolidayShifts : schedulingRule.WeekdayShifts;
+                        var shiftRequirement = shiftRequirements.FirstOrDefault(sr => sr.ShiftName == currentShift);
+
+                        // Only convert non-priority shifts to rest, or half-day shifts that also don't have priority
+                        if (shiftRequirement?.Priority.HasValue == true) continue; // Skip priority shifts
+
+                        // Check if we can assign rest without violating constraints
+                        if (CanAssignShiftWithConsecutiveCheckAndStats(personName, "休息", date, scheduleData, shifts, rules, existingSchedule))
+                        {
+                            // Update statistics: remove the old shift count and add to rest count
+                            if (staffStats.ContainsKey(personName) && staffStats[personName].ShiftCounts.ContainsKey(currentShift))
+                            {
+                                staffStats[personName].ShiftCounts[currentShift]--;
+                            }
+                            if (dailyStats.ContainsKey(dateStr) && dailyStats[dateStr].ShiftCounts.ContainsKey(currentShift))
+                            {
+                                dailyStats[dateStr].ShiftCounts[currentShift]--;
+                                dailyStats[dateStr].TotalAssigned--;
+                            }
+
+                            // Add to rest days count
+                            if (!staffStats[personName].ShiftCounts.ContainsKey("休息"))
+                            {
+                                staffStats[personName].ShiftCounts["休息"] = 0;
+                            }
+                            staffStats[personName].ShiftCounts["休息"]++;
+
+                            // Assign rest
+                            scheduleData[personName].Shifts[dateStr] = "休息";
+                            converted++;
+                        }
+                    }
+                }
+                else if (difference < 0)
+                {
+                    // Have more rest day equivalents than needed (more than Rules.TotalRestDays)
+                    // We might need to convert some rest days to work days
+                    // However, we need to be very careful not to disrupt priority shift assignments
+                    int excessRestDays = (int)Math.Ceiling(Math.Abs(difference));
+
+                    // To reduce rest days, we need to convert rest days to work days
+                    // Let's focus on converting to non-priority shifts to preserve priority assignments
+                    int converted = 0;
+                    foreach (var date in dateRange)
+                    {
+                        if (converted >= excessRestDays) break;
+
+                        var dateStr = date.ToString("yyyy-MM-dd");
+                        var currentShift = scheduleData[personName].Shifts[dateStr];
+
+                        // Only consider converting rest days to work days
+                        if (currentShift != "休息") continue;
+
+                        // Find a non-priority shift to assign instead
+                        var isHoliday = IsHoliday(date, rules);
+                        var shiftRequirements = isHoliday ? schedulingRule.HolidayShifts : schedulingRule.WeekdayShifts;
+                        var nonPriorityShifts = shiftRequirements.Where(sr => !sr.Priority.HasValue).ToList();
+
+                        bool shiftAssigned = false;
+                        foreach (var shiftReq in nonPriorityShifts)
+                        {
+                            var shiftType = shiftReq.ShiftName;
+                            var requiredCount = shiftReq.RequiredCount;
+
+                            // Count current assignments for this shift type on this date
+                            int currentAssignments = 0;
+                            foreach (var staff in scheduleData.Keys)
+                            {
+                                if (scheduleData[staff].Shifts[dateStr] == shiftType)
+                                {
+                                    currentAssignments++;
+                                }
+                            }
+
+                            // Check if we still need more people for this shift and person can be assigned
+                            if (currentAssignments < requiredCount &&
+                                CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
+                            {
+                                // Update statistics: remove from rest day count and add to shift count
+                                if (staffStats.ContainsKey(personName) && staffStats[personName].ShiftCounts.ContainsKey("休息"))
+                                {
+                                    staffStats[personName].ShiftCounts["休息"]--;
+                                }
+                                if (dailyStats.ContainsKey(dateStr) && dailyStats[dateStr].ShiftCounts.ContainsKey("休息"))
+                                {
+                                    dailyStats[dateStr].ShiftCounts["休息"]--;
+                                    dailyStats[dateStr].TotalAssigned++;
+                                }
+
+                                // Add to new shift count
+                                if (!staffStats[personName].ShiftCounts.ContainsKey(shiftType))
+                                {
+                                    staffStats[personName].ShiftCounts[shiftType] = 0;
+                                }
+                                staffStats[personName].ShiftCounts[shiftType]++;
+
+                                // Assign the work shift
+                                scheduleData[personName].Shifts[dateStr] = shiftType;
+                                shiftAssigned = true;
+                                converted++;
+                                break;
+                            }
+                        }
+
+                        if (!shiftAssigned)
+                        {
+                            // If we couldn't assign a specific needed shift, keep as rest day
+                            // This means the person has excess rest day equivalents but we can't reasonably convert them without disrupting requirements
+                        }
+                    }
                 }
             }
         }
@@ -691,304 +746,12 @@ namespace SchedulingApp.Services.Implementations
             return rotated;
         }
 
-        private void AssignShiftCountFlexible(Dictionary<string, ScheduleDataModel> scheduleData, DateTime date,
-            string shift, int requiredCount, List<StaffModel> availableStaff, List<ShiftModel> shifts, RulesModel rules)
-        {
-            var dateStr = date.ToString("yyyy-MM-dd");
-            var eligibleStaff = new List<StaffModel>();
-
-            // Find eligible staff for this shift who are not yet assigned for this date
-            foreach (var person in availableStaff)
-            {
-                var personName = person.Name;
-
-                // Check if this person is still unassigned for this date
-                if (scheduleData[personName].Shifts[dateStr] != "")
-                    continue;
-
-                // Apply constraints
-                if (CanAssignShiftWithConsecutiveCheck(personName, shift, date, scheduleData, shifts, rules))
-                {
-                }
-            }
-
-            // Rotate staff to ensure fair distribution
-            var rotatedEligibleStaff = RotateStaffForFairDistribution(eligibleStaff, date);
-
-            // For non-priority shifts, assign up to the required count, but allow flexibility
-            int assigned = 0;
-            foreach (var person in rotatedEligibleStaff)
-            {
-                if (assigned >= requiredCount)
-                    break;
-
-                // Double-check constraints before assignment
-                if (CanAssignShiftWithConsecutiveCheck(person.Name, shift, date, scheduleData, shifts, rules))
-                {
-                    scheduleData[person.Name].Shifts[dateStr] = shift;
-                    assigned++;
-                }
-            }
-        }
-
-        // Enhanced constraint check that includes consecutive day checking
-        private bool CanAssignShiftWithConsecutiveCheck(string personName, string shift, DateTime date,
-            Dictionary<string, ScheduleDataModel> scheduleData, List<ShiftModel> shifts, RulesModel rules)
-        {
-            var dateStr = date.ToString("yyyy-MM-dd");
-
-            // Check if already assigned for this date
-            if (scheduleData[personName].Shifts[dateStr] != "")
-            {
-                return false;
-            }
-
-
-            // Check consecutive work days
-            if (shift != "休息")
-            {
-                var tempScheduleData = new Dictionary<string, ScheduleDataModel>();
-                foreach (var kvp in scheduleData)
-                {
-                    tempScheduleData[kvp.Key] = new ScheduleDataModel
-                    {
-                        Id = kvp.Value.Id,
-                        Group = kvp.Value.Group,
-                        Shifts = new Dictionary<string, string>(kvp.Value.Shifts)
-                    };
-                }
-
-                tempScheduleData[personName].Shifts[dateStr] = shift;
-
-                double totalConsecutive = CalculateConsecutiveWorkDaysWithRules(personName, date, shift, tempScheduleData, rules);
-
-                if (totalConsecutive > rules.MaxConsecutiveDays)
-                {
-                    return false;
-                }
-            }
-
-
-            return true;
-        }
-
-        // Method to enforce consecutive day limit by inserting rest days when needed
-        private void EnforceConsecutiveDayLimit(Dictionary<string, ScheduleDataModel> scheduleData,
-            List<DateTime> dateRange, List<StaffModel> applicableStaff, RulesModel rules)
-        {
-            foreach (var person in applicableStaff)
-            {
-                var personName = person.Name;
-                int consecutiveCount = 0;
-                DateTime? lastWorkDay = null;
-
-                for (int i = 0; i < dateRange.Count; i++)
-                {
-                    var date = dateRange[i];
-                    var dateStr = date.ToString("yyyy-MM-dd");
-                    var shift = scheduleData[personName].Shifts[dateStr];
-
-                    if (shift != "休息" && !string.IsNullOrEmpty(shift))
-                    {
-                        // This is a work day
-                        if (lastWorkDay.HasValue && date.Date == lastWorkDay.Value.AddDays(1).Date)
-                        {
-                            // Consecutive work day
-                            consecutiveCount += (int)GetShiftDayValue(shift, rules);
-                        }
-                        else
-                        {
-                            // New work sequence
-                            consecutiveCount = (int)GetShiftDayValue(shift, rules);
-                        }
-
-                        // If we've reached max consecutive days, force a rest day tomorrow if possible
-                        if (consecutiveCount >= rules.MaxConsecutiveDays && i < dateRange.Count - 1)
-                        {
-                            var nextDate = dateRange[i + 1];
-                            var nextDateStr = nextDate.ToString("yyyy-MM-dd");
-                            var nextShift = scheduleData[personName].Shifts[nextDateStr];
-
-                            // Only replace if it's not already a rest day and it's a work shift
-                            if (nextShift != "休息" && !string.IsNullOrEmpty(nextShift))
-                            {
-                                // Try to shift this to a future day if there's another staff member available
-                                // For now, just force the rest day if possible
-                                if (CanAssignShiftWithConsecutiveCheck(personName, "休息", nextDate, scheduleData, new List<ShiftModel>(), rules))
-                                {
-                                    scheduleData[personName].Shifts[nextDateStr] = "休息";
-                                }
-                            }
-                        }
-
-                        lastWorkDay = date;
-                    }
-                    else
-                    {
-                        // This is a rest day or unassigned
-                        consecutiveCount = 0;
-                        lastWorkDay = date;
-                    }
-                }
-            }
-        }
-
-        // Method to enforce rest day requirements for each employee
-        private void EnforceRestDayRequirements(Dictionary<string, ScheduleDataModel> scheduleData,
-            List<DateTime> dateRange, List<StaffModel> applicableStaff, RulesModel rules)
-        {
-            foreach (var person in applicableStaff)
-            {
-                var personName = person.Name;
-
-                // Count current rest days for this person
-                int currentRestDays = 0;
-                foreach (var date in dateRange)
-                {
-                    var dateStr = date.ToString("yyyy-MM-dd");
-                    if (scheduleData[personName].Shifts[dateStr] == "休息")
-                    {
-                        currentRestDays++;
-                    }
-                }
-
-                // Calculate how many more rest days are needed
-                int restDaysNeeded = rules.TotalRestDays - currentRestDays;
-
-                if (restDaysNeeded > 0)
-                {
-                    // Need to assign more rest days
-                    // Look for work days that can be converted to rest days
-                    var workDays = new List<DateTime>();
-                    foreach (var date in dateRange)
-                    {
-                        var dateStr = date.ToString("yyyy-MM-dd");
-                        var shift = scheduleData[personName].Shifts[dateStr];
-                        if (shift != "休息" && !string.IsNullOrEmpty(shift))
-                        {
-                            workDays.Add(date);
-                        }
-                    }
-
-                    // Choose work days to convert to rest days, prioritizing days that don't break consecutive work limits
-                    int converted = 0;
-                    foreach (var date in workDays)
-                    {
-                        if (converted >= restDaysNeeded) break;
-
-                        var dateStr = date.ToString("yyyy-MM-dd");
-
-                        // Check if converting this day to rest would still allow the person to meet other requirements
-                        if (CanConvertToRestDay(personName, date, scheduleData, dateRange, applicableStaff, rules))
-                        {
-                            scheduleData[personName].Shifts[dateStr] = "休息";
-                            converted++;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Helper to check if a work day can be converted to a rest day without violating other constraints
-        private bool CanConvertToRestDay(string personName, DateTime date, Dictionary<string, ScheduleDataModel> scheduleData,
-            List<DateTime> dateRange, List<StaffModel> applicableStaff, RulesModel rules)
-        {
-            var dateStr = date.ToString("yyyy-MM-dd");
-            var originalShift = scheduleData[personName].Shifts[dateStr];
-
-            // Temporarily change to rest
-            scheduleData[personName].Shifts[dateStr] = "休息";
-
-            // Check if this change violates any constraints
-            bool isValid = true;
-
-            // Check consecutive day constraint
-            double totalConsecutive = CalculateConsecutiveWorkDaysWithRules(personName, date, "休息", scheduleData, rules);
-            if (totalConsecutive > rules.MaxConsecutiveDays)
-            {
-                isValid = false;
-            }
-
-            // Restore original value for now
-            scheduleData[personName].Shifts[dateStr] = originalShift;
-
-            return isValid;
-        }
-
-        // Method to handle half-day shift consecutive day arrangements
-        private void HandleHalfDayShiftConsecutiveSchedule(Dictionary<string, ScheduleDataModel> scheduleData,
-            List<DateTime> dateRange, List<StaffModel> applicableStaff, List<ShiftModel> shifts, RulesModel rules)
-        {
-            // Process each half-day shift type
-            foreach (var halfDayShift in rules.HalfDayShifts)
-            {
-                for (int i = 0; i < dateRange.Count - 1; i++) // -1 to have the next day available
-                {
-                    var currentDate = dateRange[i];
-                    var nextDate = dateRange[i + 1];
-                    var currentDateStr = currentDate.ToString("yyyy-MM-dd");
-                    var nextDateStr = nextDate.ToString("yyyy-MM-dd");
-
-                    // Look for people who have this half-day shift on current date but not on the next date
-                    foreach (var person in applicableStaff)
-                    {
-                        var personName = person.Name;
-
-                        // Check if this person has the half-day shift on current date but not on the next
-                        if (scheduleData[personName].Shifts.ContainsKey(currentDateStr) &&
-                            scheduleData[personName].Shifts[currentDateStr] == halfDayShift &&
-                            scheduleData[personName].Shifts.ContainsKey(nextDateStr) &&
-                            scheduleData[personName].Shifts[nextDateStr] != halfDayShift &&
-                            scheduleData[personName].Shifts[nextDateStr] != "休息")
-                        {
-                            // Check if we can assign the same half-day shift to the next date
-                            if (CanAssignShiftWithConsecutiveCheck(personName, halfDayShift, nextDate, scheduleData, shifts, rules))
-                            {
-                                // Check if this would still meet the shift requirements for the next date
-                                // For this, we need to count existing assignments for the next date
-                                int currentAssignmentCount = 0;
-                                foreach (var p in applicableStaff)
-                                {
-                                    if (scheduleData[p.Name].Shifts[nextDateStr] == halfDayShift)
-                                    {
-                                        currentAssignmentCount++;
-                                    }
-                                }
-
-                                // Get the required count for this shift on the next date
-                                var isNextHoliday = IsHoliday(nextDate, rules);
-                                var shiftRequirements = isNextHoliday ? rules.Holiday : rules.Weekday;
-                                var requirement = shiftRequirements.FirstOrDefault(r => r.ShiftName == halfDayShift);
-
-                                if (requirement != null && currentAssignmentCount < requirement.RequiredCount)
-                                {
-                                    // Assign the half-day shift to consecutive days
-                                    scheduleData[personName].Shifts[nextDateStr] = halfDayShift;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Old EnsureRestDayRequirements method will now be replaced since we have the new implementation
-        // Keep the method name but update the content to be empty or mark as deprecated
-        private void EnsureRestDayRequirements(Dictionary<string, ScheduleDataModel> scheduleData,
-            List<DateTime> dateRange, List<StaffModel> applicableStaff, List<ShiftModel> shifts,
-            RulesModel rules, Dictionary<string, StaffStatistics> staffStats, Dictionary<string, DailyStatistics> dailyStats)
-        {
-            // This method is replaced by the new EnforceRestDayRequirements implementation
-            // The new method is called separately in ProcessSchedulingRuleWithFullRequirements
-        }
-
         private void ProcessOldStyleRulesWithFullRequirements(Dictionary<string, ScheduleDataModel> scheduleData,
             List<DateTime> dateRange, List<StaffModel> staff, List<ShiftModel> shifts, RulesModel rules,
             Dictionary<string, Dictionary<string, string>> existingSchedule)
         {
-            // Initialize statistics tracking
-            var staffStats = new Dictionary<string, StaffStatistics>();
-            var dailyStats = new Dictionary<string, DailyStatistics>();
+            Dictionary<string, StaffStatistics> staffStats = [];
+            Dictionary<string, DailyStatistics> dailyStats = [];
 
             foreach (var person in staff)
             {
@@ -996,9 +759,6 @@ namespace SchedulingApp.Services.Implementations
                 {
                     StaffName = person.Name,
                     ShiftCounts = new Dictionary<string, double>(),
-                    TotalShiftDays = 0,
-                    TotalWorkDays = 0,
-                    TotalRestDays = 0
                 };
 
                 // Initialize shift counts for each shift type
@@ -1057,7 +817,7 @@ namespace SchedulingApp.Services.Implementations
                     {
                         var personName = person.Name;
                         if (scheduleData[personName].Shifts[dateStr] == "" &&
-                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
+                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
                         {
                             eligibleStaff.Add(person);
                         }
@@ -1075,13 +835,13 @@ namespace SchedulingApp.Services.Implementations
 
                         var personName = person.Name;
                         if (scheduleData[personName].Shifts[dateStr] == "" &&
-                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
+                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
                         {
                             // Perform assignment
                             scheduleData[personName].Shifts[dateStr] = shiftType;
 
                             // Update statistics
-                            UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, scheduleData, staffStats, dailyStats);
+                            UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, rules, scheduleData, staffStats, dailyStats);
                             assigned++;
                         }
                     }
@@ -1101,7 +861,7 @@ namespace SchedulingApp.Services.Implementations
                     foreach (var person in remainingUnassigned)
                     {
                         var personName = person.Name;
-                        if (CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
+                        if (CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
                         {
                             eligibleStaff.Add(person);
                         }
@@ -1119,13 +879,13 @@ namespace SchedulingApp.Services.Implementations
 
                         var personName = person.Name;
                         if (scheduleData[personName].Shifts[dateStr] == "" &&
-                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
+                            CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
                         {
                             // Perform assignment
                             scheduleData[personName].Shifts[dateStr] = shiftType;
 
                             // Update statistics
-                            UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, scheduleData, staffStats, dailyStats);
+                            UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, rules, scheduleData, staffStats, dailyStats);
                             assigned++;
                         }
                     }
@@ -1172,7 +932,7 @@ namespace SchedulingApp.Services.Implementations
                     {
                         // Can assign a rest day
                         scheduleData[personName].Shifts[dateStr] = "休息";
-                        UpdateStatisticsAfterAssignment(personName, "休息", dateStr, scheduleData, staffStats, dailyStats);
+                        UpdateStatisticsAfterAssignment(personName, "休息", dateStr, rules, scheduleData, staffStats, dailyStats);
                     }
                     else
                     {
@@ -1200,10 +960,10 @@ namespace SchedulingApp.Services.Implementations
 
                             // If we need more of this shift and it's eligible for this person
                             if (currentAssignments < requiredCount &&
-                                CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule, staffStats))
+                                CanAssignShiftWithConsecutiveCheckAndStats(personName, shiftType, date, scheduleData, shifts, rules, existingSchedule))
                             {
                                 scheduleData[personName].Shifts[dateStr] = shiftType;
-                                UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, scheduleData, staffStats, dailyStats);
+                                UpdateStatisticsAfterAssignment(personName, shiftType, dateStr, rules, scheduleData, staffStats, dailyStats);
                                 shiftAssigned = true;
                                 break;
                             }
@@ -1213,7 +973,7 @@ namespace SchedulingApp.Services.Implementations
                         if (!shiftAssigned)
                         {
                             scheduleData[personName].Shifts[dateStr] = "休息";
-                            UpdateStatisticsAfterAssignment(personName, "休息", dateStr, scheduleData, staffStats, dailyStats);
+                            UpdateStatisticsAfterAssignment(personName, "休息", dateStr, rules, scheduleData, staffStats, dailyStats);
                         }
                     }
                 }
@@ -1236,136 +996,6 @@ namespace SchedulingApp.Services.Implementations
             return false;
         }
 
-        private bool CanAssignShift(string personName, string shift, DateTime date, Dictionary<string, ScheduleDataModel> scheduleData,
-            List<ShiftModel> shifts, RulesModel rules)
-        {
-            var dateStr = date.ToString("yyyy-MM-dd");
-
-            // Check if already assigned for this date
-            if (scheduleData[personName].Shifts.ContainsKey(dateStr))
-            {
-                return false;
-            }
-
-
-            // Check consecutive work days
-            if (shift != "休息")
-            {
-                var tempScheduleData = new Dictionary<string, ScheduleDataModel>();
-                foreach (var kvp in scheduleData)
-                {
-                    tempScheduleData[kvp.Key] = new ScheduleDataModel
-                    {
-                        Id = kvp.Value.Id,
-                        Group = kvp.Value.Group,
-                        Shifts = new Dictionary<string, string>(kvp.Value.Shifts)
-                    };
-                }
-
-                tempScheduleData[personName].Shifts[dateStr] = shift;
-
-                double totalConsecutive = CalculateConsecutiveWorkDaysWithRules(personName, date, shift, tempScheduleData, rules);
-
-                if (totalConsecutive > rules.MaxConsecutiveDays)
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private double CalculateConsecutiveWorkDaysWithRules(string personName, DateTime date, string shift, Dictionary<string, ScheduleDataModel> scheduleData, RulesModel rules)
-        {
-            double maxConsecutive = 0;
-            double currentConsecutive = 0;
-            DateTime? lastAssignedDate = null;
-
-            // Get a wider date range for calculation
-            var dateRange = new List<DateTime>();
-            for (int i = -15; i <= 15; i++)
-            {
-                dateRange.Add(date.AddDays(i));
-            }
-
-            var sortedDates = dateRange.OrderBy(d => d).ToList();
-
-            foreach (var checkDate in sortedDates)
-            {
-                var checkDateStr = checkDate.ToString("yyyy-MM-dd");
-                if (scheduleData[personName].Shifts.ContainsKey(checkDateStr))
-                {
-                    var assignedShift = scheduleData[personName].Shifts[checkDateStr];
-                    if (assignedShift != "休息")
-                    {
-                        if (lastAssignedDate.HasValue && checkDate.Date == lastAssignedDate.Value.AddDays(1).Date)
-                        {
-                            currentConsecutive += GetShiftDayValue(assignedShift, rules);
-                        }
-                        else
-                        {
-                            currentConsecutive = GetShiftDayValue(assignedShift, rules);
-                        }
-                        maxConsecutive = Math.Max(maxConsecutive, currentConsecutive);
-                        lastAssignedDate = checkDate;
-                    }
-                    else
-                    {
-                        currentConsecutive = 0;
-                        lastAssignedDate = checkDate;
-                    }
-                }
-            }
-
-            return maxConsecutive;
-        }
-
-        private double CalculateConsecutiveWorkDays(string personName, DateTime date, string shift, Dictionary<string, ScheduleDataModel> scheduleData)
-        {
-            // This method is for general use without access to rules - uses default logic
-            double maxConsecutive = 0;
-            double currentConsecutive = 0;
-            DateTime? lastAssignedDate = null;
-
-            // Get a wider date range for calculation
-            var dateRange = new List<DateTime>();
-            for (int i = -15; i <= 15; i++)
-            {
-                dateRange.Add(date.AddDays(i));
-            }
-
-            var sortedDates = dateRange.OrderBy(d => d).ToList();
-
-            foreach (var checkDate in sortedDates)
-            {
-                var checkDateStr = checkDate.ToString("yyyy-MM-dd");
-                if (scheduleData[personName].Shifts.ContainsKey(checkDateStr))
-                {
-                    var assignedShift = scheduleData[personName].Shifts[checkDateStr];
-                    if (assignedShift != "休息")
-                    {
-                        if (lastAssignedDate.HasValue && checkDate.Date == lastAssignedDate.Value.AddDays(1).Date)
-                        {
-                            currentConsecutive += GetShiftDayValue(assignedShift, null);
-                        }
-                        else
-                        {
-                            currentConsecutive = GetShiftDayValue(assignedShift, null);
-                        }
-                        maxConsecutive = Math.Max(maxConsecutive, currentConsecutive);
-                        lastAssignedDate = checkDate;
-                    }
-                    else
-                    {
-                        currentConsecutive = 0;
-                        lastAssignedDate = checkDate;
-                    }
-                }
-            }
-
-            return maxConsecutive;
-        }
-
         private double GetShiftDayValue(string shift, RulesModel? rules = null)
         {
             // Check if shift is in HalfDayShifts collection from rules
@@ -1373,35 +1003,13 @@ namespace SchedulingApp.Services.Implementations
             {
                 return 0.5;
             }
-            // Specific check for 甲2PLUS which is also treated as a half-day shift
-            else if (shift == "甲2PLUS")
-            {
-                return 0.5;
-            }
             return 1.0;
-        }
-
-        private void FillUnassignedDates(Dictionary<string, ScheduleDataModel> scheduleData, List<DateTime> dateRange)
-        {
-            // For any unassigned dates, assign default shifts based on priority
-            foreach (var personName in scheduleData.Keys)
-            {
-                foreach (var date in dateRange)
-                {
-                    var dateStr = date.ToString("yyyy-MM-dd");
-                    if (!scheduleData[personName].Shifts.ContainsKey(dateStr))
-                    {
-                        // Default to assigning 乙1 if no better option is available
-                        scheduleData[personName].Shifts[dateStr] = "乙1";
-                    }
-                }
-            }
         }
 
         // Enhanced constraint check that includes both consecutive day checking and statistics tracking
         private bool CanAssignShiftWithConsecutiveCheckAndStats(string personName, string shift, DateTime date,
             Dictionary<string, ScheduleDataModel> scheduleData, List<ShiftModel> shifts, RulesModel rules,
-            Dictionary<string, Dictionary<string, string>> existingSchedule, Dictionary<string, StaffStatistics> staffStats)
+            Dictionary<string, Dictionary<string, string>> existingSchedule)
         {
             var dateStr = date.ToString("yyyy-MM-dd");
 
@@ -1434,6 +1042,10 @@ namespace SchedulingApp.Services.Implementations
                 {
                     return false;
                 }
+            }
+            else
+            {
+
             }
 
             return true;
@@ -1493,11 +1105,11 @@ namespace SchedulingApp.Services.Implementations
                 {
                     if (lastAssignedDate.HasValue && currentDate.Date == lastAssignedDate.Value.AddDays(1).Date)
                     {
-                        currentConsecutive += GetShiftDayValue(assignedShift, rules);
+                        currentConsecutive += 1;
                     }
                     else
                     {
-                        currentConsecutive = GetShiftDayValue(assignedShift, rules);
+                        currentConsecutive = 1;
                     }
                     maxConsecutive = Math.Max(maxConsecutive, currentConsecutive);
                     lastAssignedDate = currentDate;
@@ -1516,6 +1128,7 @@ namespace SchedulingApp.Services.Implementations
 
         // Method to update statistics after each assignment
         private void UpdateStatisticsAfterAssignment(string personName, string shiftType, string dateStr,
+             RulesModel rules,
             Dictionary<string, ScheduleDataModel> scheduleData,
             Dictionary<string, StaffStatistics> staffStats,
             Dictionary<string, DailyStatistics> dailyStats)
@@ -1535,13 +1148,20 @@ namespace SchedulingApp.Services.Implementations
                 // Update total counts
                 if (shiftType == "休息")
                 {
-                    staffStats[personName].TotalRestDays++;
+                    staffStats[personName].ShiftCounts["休息"]++;
+                }
+                else if(rules.HalfDayShifts.Contains(shiftType))
+                {
+                    // For half-day shifts, count as 0.5 for work day calculations
+                    double shiftDayValue = GetShiftDayValue(shiftType, rules);
+                    staffStats[personName].ShiftCounts["休息"] += shiftDayValue;
                 }
                 else if (!string.IsNullOrEmpty(shiftType))
                 {
-                    staffStats[personName].TotalWorkDays++;
+                    // For half-day shifts, count as 0.5 for day calculations
+                    double shiftDayValue = GetShiftDayValue(shiftType, rules);
+                    staffStats[personName].ShiftCounts[shiftType] += shiftDayValue;
                 }
-                staffStats[personName].TotalShiftDays++;
             }
 
             // Update daily statistics
@@ -1632,10 +1252,158 @@ namespace SchedulingApp.Services.Implementations
             }
         }
 
+        // Method to ensure TotalRestDays requirement after scheduling is complete,
+        // but without disrupting priority shift requirements
+        private void EnsureTotalRestDaysRequirementAfterScheduling(Dictionary<string, ScheduleDataModel> scheduleData,
+            List<DateTime> dateRange, List<StaffModel> applicableStaff, RulesModel rules,
+            Dictionary<string, Dictionary<string, string>> existingSchedule)
+        {
+            // Check each employee's rest days after the main scheduling
+            foreach (var person in applicableStaff)
+            {
+                var personName = person.Name;
+
+                // Count current rest days for this person in the schedule
+                int currentRestDays = 0;
+                foreach (var date in dateRange)
+                {
+                    var dateStr = date.ToString("yyyy-MM-dd");
+                    if (scheduleData.ContainsKey(personName) &&
+                        scheduleData[personName].Shifts.ContainsKey(dateStr) &&
+                        scheduleData[personName].Shifts[dateStr] == "休息")
+                    {
+                        currentRestDays++;
+                    }
+                }
+
+                // Add existing rest days from previous schedule
+                int existingRestDays = 0;
+                if (existingSchedule.ContainsKey(personName))
+                {
+                    foreach (var kvp in existingSchedule[personName])
+                    {
+                        if (kvp.Value == "休息")
+                        {
+                            existingRestDays++;
+                        }
+                    }
+                }
+
+                int totalCurrentRestDays = currentRestDays + existingRestDays;
+                int targetRestDays = rules.TotalRestDays;
+
+                // If this person needs more rest days, look for opportunities to adjust
+                // but do this carefully to avoid disrupting priority shift requirements
+                if (totalCurrentRestDays < targetRestDays)
+                {
+                    int restDaysNeeded = targetRestDays - totalCurrentRestDays;
+
+                    // Try to find non-priority shift days that can be converted to rest days
+                    var workDays = new List<(DateTime date, string shiftType)>();
+                    foreach (var date in dateRange)
+                    {
+                        var dateStr = date.ToString("yyyy-MM-dd");
+                        var shiftType = scheduleData[personName].Shifts[dateStr];
+
+                        if (shiftType != "休息" && !string.IsNullOrEmpty(shiftType))
+                        {
+                            // Check if this is a non-priority shift day for this person
+                            var isHoliday = IsHoliday(date, rules);
+                            var applicableRule = rules.SchedulingRules?.FirstOrDefault() ?? null;
+                            var shiftRequirements = isHoliday && applicableRule != null ?
+                                applicableRule.HolidayShifts :
+                                (applicableRule?.WeekdayShifts ?? (isHoliday ? rules.Holiday : rules.Weekday));
+
+                            var shiftRequirement = shiftRequirements.FirstOrDefault(sr => sr.ShiftName == shiftType);
+
+                            // Only consider non-priority shifts for conversion to rest
+                            if (shiftRequirement != null && !shiftRequirement.Priority.HasValue)
+                            {
+                                // Check if converting this day to rest would still allow other staff to meet priority requirements
+                                workDays.Add((date, shiftType));
+                            }
+                        }
+                    }
+
+                    // Sort work days by shift priority (lower priority shifts first to convert)
+                    workDays.Sort((a, b) =>
+                    {
+                        var isHolidayA = IsHoliday(a.date, rules);
+                        var isHolidayB = IsHoliday(b.date, rules);
+                        var applicableRule = rules.SchedulingRules?.FirstOrDefault() ?? null;
+                        var shiftReqsA = isHolidayA && applicableRule != null ?
+                            applicableRule.HolidayShifts : (applicableRule?.WeekdayShifts ?? (isHolidayA ? rules.Holiday : rules.Weekday));
+                        var shiftReqsB = isHolidayB && applicableRule != null ?
+                            applicableRule.HolidayShifts : (applicableRule?.WeekdayShifts ?? (isHolidayB ? rules.Holiday : rules.Weekday));
+
+                        var reqA = shiftReqsA.FirstOrDefault(sr => sr.ShiftName == a.shiftType);
+                        var reqB = shiftReqsB.FirstOrDefault(sr => sr.ShiftName == b.shiftType);
+
+                        // We want to convert non-priority shifts first, so they come first in sort
+                        // Since non-priority shifts have null Priority, they should come first
+                        if (reqA?.Priority == null && reqB?.Priority != null) return -1;
+                        if (reqA?.Priority != null && reqB?.Priority == null) return 1;
+                        if (reqA?.Priority == null && reqB?.Priority == null) return 0;
+
+                        return (reqA?.Priority ?? 0).CompareTo(reqB?.Priority ?? 0);
+                    });
+
+                    // Convert eligible work days to rest days, up to the required number
+                    int converted = 0;
+                    foreach (var (date, shiftType) in workDays)
+                    {
+                        if (converted >= restDaysNeeded) break;
+
+                        var dateStr = date.ToString("yyyy-MM-dd");
+
+                        // Check if other staff can cover the shift if we convert this person to rest
+                        var isHoliday = IsHoliday(date, rules);
+                        var applicableRule = rules.SchedulingRules?.FirstOrDefault() ?? null;
+                        var shiftRequirements = isHoliday && applicableRule != null ?
+                            applicableRule.HolidayShifts :
+                            (applicableRule?.WeekdayShifts ?? (isHoliday ? rules.Holiday : rules.Weekday));
+
+                        var shiftRequirement = shiftRequirements.FirstOrDefault(sr => sr.ShiftName == shiftType);
+
+                        if (shiftRequirement != null)
+                        {
+                            // Count how many others are assigned to this shift on this date
+                            int othersAssigned = 0;
+                            foreach (var otherPerson in applicableStaff)
+                            {
+                                if (otherPerson.Name != personName &&
+                                    scheduleData.ContainsKey(otherPerson.Name) &&
+                                    scheduleData[otherPerson.Name].Shifts.ContainsKey(dateStr) &&
+                                    scheduleData[otherPerson.Name].Shifts[dateStr] == shiftType)
+                                {
+                                    othersAssigned++;
+                                }
+                            }
+
+                            // Only convert to rest if others can still meet the requirement
+                            if (othersAssigned >= shiftRequirement.RequiredCount)
+                            {
+                                // Check consecutive days constraint
+                                var tempSchedule = new Dictionary<string, string>(scheduleData[personName].Shifts);
+                                tempSchedule[dateStr] = "休息";
+
+                                if (CheckMaxConsecutiveDaysConstraint(tempSchedule, rules.MaxConsecutiveDays, dateRange, personName, existingSchedule))
+                                {
+                                    // Perform the conversion
+                                    scheduleData[personName].Shifts[dateStr] = "休息";
+                                    converted++;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Helper method to check MaxConsecutiveDays constraint after a change
         private bool CheckMaxConsecutiveDaysConstraint(Dictionary<string, string> newPersonSchedule,
             int maxConsecutiveDays, List<DateTime> dateRange, string personName,
-            Dictionary<string, Dictionary<string, string>> existingSchedule = null)
+            Dictionary<string, Dictionary<string, string>> existingSchedule = null!)
         {
             // Create a temporary combined view of the schedule including existing schedule
             var combinedSchedule = new Dictionary<string, string>();

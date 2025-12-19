@@ -1,10 +1,10 @@
-using System.Collections.ObjectModel;
-using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HandyControl.Controls;
 using SchedulingApp.Models;
 using SchedulingApp.Services.Interfaces;
+using System.Collections.ObjectModel;
+using System.Windows;
 
 namespace SchedulingApp.ViewModels
 {
@@ -74,7 +74,6 @@ namespace SchedulingApp.ViewModels
                 var rules = _dataService.LoadRules();
                 // Auto-populate weekends if CustomHolidays is empty
                 FillWeekendsIfEmpty(rules, StartDate, EndDate);
-
                 // Use the new person-based schedule generation method
                 _currentScheduleData = _schedulingService.GeneratePersonBasedSchedule(
                     staffList,
@@ -683,8 +682,7 @@ namespace SchedulingApp.ViewModels
                             var shiftInfo = staffRow.DateShifts[dateHeader];
                             if (shiftInfo.ShiftName == shiftType)
                             {
-                                // If this is a half-day shift, count as 0.5, otherwise as 1
-                                count += halfDayShifts.Contains(shiftType) ? 0.5 : 1.0;
+                                count += 1.0;
                             }
                         }
                     }
@@ -742,7 +740,7 @@ namespace SchedulingApp.ViewModels
                         )
                         {
                             // Only count working staff (not rest days)
-                            totalWorking += halfDayShifts.Contains(shiftInfo.ShiftName) ? 0.5 : 1.0;
+                            totalWorking += 1.0;
                         }
                     }
                 }
@@ -829,9 +827,9 @@ namespace SchedulingApp.ViewModels
                         var shiftInfo = staffRow.DateShifts[dateHeader];
                         var shiftType = string.IsNullOrEmpty(shiftInfo.ShiftName) ? "休息" : shiftInfo.ShiftName;
 
-                        // This is a shift assignment
                         if (staffStat.ShiftCounts.ContainsKey(shiftType))
                         {
+                            // Count all shifts as 1 in the general shift counts
                             staffStat.ShiftCounts[shiftType]++;
                         }
                         else
@@ -841,23 +839,27 @@ namespace SchedulingApp.ViewModels
                     }
                 }
 
-                // According to the requirement: "记录每个员工在排班日期区间内的每个班次数量统计，包括休息天数（注意这里半天班记录半天休息，但在班次中还是记录1）"
-                // The rest days calculation should be based on: total days - work days
-                // - Full-day shifts count as 1.0 work day
-                // - Half-day shifts count as 0.5 work day
-                // - Empty shifts (rest days) count as 0 work days (so they remain as rest days)
-                var resetDays = 0.0;
-                foreach(var (key,value) in staffStat.ShiftCounts){
-                    if (halfDayShifts.Contains(key))
-                    {
-                        resetDays += 0.5 * staffStat.ShiftCounts[key];
-                    }
-                }
-
-                foreach(var (key, value) in staffStat.ShiftCounts)
+                // According to the requirement: "在员工班级统计的"休息"中，Rules.HalfDayShifts记作0.5天，其他地方统计都记作1天"
+                // In employee statistics, HalfDayShifts should count as 0.5 days for rest calculation
+                // We need to adjust the "休息" count by considering that half-day shifts count as 0.5 rest day equivalent
+                if (staffStat.ShiftCounts.ContainsKey("休息"))
                 {
-                    if (key.Equals("休息"))
-                        staffStat.ShiftCounts[key] += resetDays;
+                    double currentRestCount = staffStat.ShiftCounts["休息"];
+                    double halfDayShiftAdjustment = 0.0;
+
+                    // For each half-day shift worked, add 0.5 to the rest equivalent count
+                    foreach (var kvp in staffStat.ShiftCounts)
+                    {
+                        if (halfDayShifts.Contains(kvp.Key) && !kvp.Key.Equals("休息"))
+                        {
+                            // Each half-day shift is equivalent to 0.5 rest day in the calculation
+                            halfDayShiftAdjustment += kvp.Value * 0.5;
+                        }
+                    }
+
+                    // Update the rest count to include the half-day shift equivalent
+                    // This reflects that someone who works half-day shifts effectively has more rest time
+                    staffStat.ShiftCounts["休息"] = currentRestCount + halfDayShiftAdjustment;
                 }
 
                 StaffStatistics.Add(staffStat);
