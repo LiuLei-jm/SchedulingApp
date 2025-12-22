@@ -54,16 +54,18 @@ namespace SchedulingApp.Services.Implementations
 
         public List<ShiftModel> LoadShifts()
         {
+            List<ShiftModel> loadedShifts;
+
             if (File.Exists(_shiftsFile))
             {
                 var json = File.ReadAllText(_shiftsFile);
                 var shifts = JsonSerializer.Deserialize<List<ShiftModel>>(json);
-                return shifts ?? new List<ShiftModel>();
+                loadedShifts = shifts ?? new List<ShiftModel>();
             }
-
-            // 默认班次数据
-            return new List<ShiftModel>
+            else
             {
+                // 默认班次数据 (excluding "休息" which is a default program value)
+                loadedShifts = new List<ShiftModel>
                 {
                     new ShiftModel
                     {
@@ -71,68 +73,64 @@ namespace SchedulingApp.Services.Implementations
                         StartTime = "08:00",
                         EndTime = "12:00",
                         Color = "#FFD700",
-                    }
-                },
-                {
+                    },
                     new ShiftModel
                     {
                         ShiftName =  "甲2",
                         StartTime = "08:00",
                         EndTime = "17:00",
                         Color = "#FFA07A",
-                    }
-                },
-                {
-
+                    },
                     new ShiftModel
                     {
                         ShiftName = "乙1",
                         StartTime = "08:30",
                         EndTime = "17:30",
                         Color = "#87CEFA",
-                    }
-                },
-                {
-
+                    },
                     new ShiftModel
                     {
                         ShiftName = "乙2",
                         StartTime = "09:30",
                         EndTime = "18:30",
                         Color = "#98FB98",
-                    }
-                },
-                {
-
+                    },
                     new ShiftModel
                     {
                         ShiftName = "丙",
                         StartTime = "12:00",
                         EndTime = "21:00",
                         Color = "#DDA0DD",
-                    }
-                },
-                {
+                    },
+                };
+            }
 
-                    new ShiftModel
-                    {
-                        ShiftName = "休息",
-                        StartTime = "",
-                        EndTime = "",
-                        Color = "#D3D3D3",
-                    }
-                },
-            };
+            // Always add "休息" as a default shift that should not be saved to the file
+            if (!loadedShifts.Any(s => s.ShiftName == "休息"))
+            {
+                loadedShifts.Add(new ShiftModel
+                {
+                    ShiftName = "休息",
+                    StartTime = "",
+                    EndTime = "",
+                    Color = "#D3D3D3",
+                });
+            }
+
+            return loadedShifts;
         }
 
         public void SaveShifts(List<ShiftModel> shifts)
         {
+            // Filter out the "休息" shift since it should be a default program value that's not persisted
+            var shiftsToSave = shifts.Where(s => s.ShiftName != "休息").ToList();
+
             var options = new JsonSerializerOptions
             {
                 WriteIndented = true,
                 Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
             };
-            var json = JsonSerializer.Serialize(shifts, options);
+            var json = JsonSerializer.Serialize(shiftsToSave, options);
             File.WriteAllText(_shiftsFile, json);
         }
 

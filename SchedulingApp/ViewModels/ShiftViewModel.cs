@@ -45,6 +45,12 @@ namespace SchedulingApp.ViewModels
                         return;
                     }
 
+                    if (newShift.ShiftName == "休息")
+                    {
+                        Growl.ErrorGlobal("无法添加\"休息\"班次，该班次为默认程序值，无法新增");
+                        return;
+                    }
+
                     Shifts.Add(newShift);
                     _dataService.SaveShifts(Shifts.ToList());
                     Growl.InfoGlobal($"成功添加班次: {newShift.ShiftName}");
@@ -65,6 +71,12 @@ namespace SchedulingApp.ViewModels
                 if (selectedShift == null)
                 {
                     Growl.ErrorGlobal("请选择要编辑的班次");
+                    return;
+                }
+
+                if (selectedShift.ShiftName == "休息")
+                {
+                    Growl.ErrorGlobal("无法编辑\"休息\"班次，该班次为默认程序值，无法编辑");
                     return;
                 }
 
@@ -127,6 +139,12 @@ namespace SchedulingApp.ViewModels
                 {
                     if (item is ShiftModel shift)
                     {
+                        // Check if any of the selected shifts is "休息", if so, prevent deletion
+                        if (shift.ShiftName == "休息")
+                        {
+                            Growl.ErrorGlobal("无法删除\"休息\"班次，该班次为默认程序值，无法删除");
+                            return;
+                        }
                         shiftToDelete.Add(shift);
                     }
                 }
