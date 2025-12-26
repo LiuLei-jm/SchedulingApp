@@ -259,7 +259,8 @@ namespace SchedulingApp.ViewModels
                                                     Name = staff.Name,
                                                     Id = staff.Id,
                                                     Group = staff.Group,
-                                                    ShiftType = shiftInfo.ShiftName  // Include the actual shift type
+                                                    ShiftType = shiftInfo.ShiftName,  // Include the actual shift type
+                                                    ShiftColor = shiftInfo.ShiftColor  // Include the shift color
                                                 }
                                             );
                                     }
@@ -308,8 +309,10 @@ namespace SchedulingApp.ViewModels
 
                     foreach (var staff in staffList)
                     {
-                        var shiftModel = _dataService.LoadShifts().FirstOrDefault(s => s.ShiftName == staff.ShiftType);
-                        var shiftColor = shiftModel?.Color ?? "#FFFFFF";
+                        // Use the shift color from the export model if available, otherwise fall back to loading from shifts
+                        var shiftColor = !string.IsNullOrEmpty(staff.ShiftColor)
+                            ? staff.ShiftColor
+                            : _dataService.LoadShifts().FirstOrDefault(s => s.ShiftName == staff.ShiftType)?.Color ?? "#FFFFFF";
 
                         var scheduleItem = new ScheduleItemModel
                         {

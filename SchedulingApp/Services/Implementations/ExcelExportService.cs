@@ -86,7 +86,177 @@ namespace SchedulingApp.Services.Implementations
             // 调整列宽
             worksheet.Columns().AdjustToContents();
 
+            // Apply cell colors based on shift type
+            for (int row = 2; row <= rowIndex - 1; row++)
+            {
+                for (int col = 4; col <= colIndex - 1; col++)
+                {
+                    var cellValue = worksheet.Cell(row, col).Value.ToString();
+                    if (!string.IsNullOrEmpty(cellValue) && cellValue != " ")
+                    {
+                        // Find the corresponding staff and date to get the shift color
+                        var staffName = worksheet.Cell(row, 1).Value.ToString();
+                        var dateIndex = col - 4;
+                        if (dateIndex < dateHeaders.Count)
+                        {
+                            var dateStr = dateHeaders[dateIndex];
+
+                            // Look up the shift color for this staff member on this date
+                            if (schedule.ContainsKey(dateStr))
+                            {
+                                var dateSchedule = schedule[dateStr];
+                                var staffSchedule = dateSchedule.FirstOrDefault(s => s.Name == staffName && s.ShiftType == cellValue);
+                                if (staffSchedule != null && !string.IsNullOrEmpty(staffSchedule.ShiftColor))
+                                {
+                                    try
+                                    {
+                                        var shiftColor = XLColor.FromHtml(staffSchedule.ShiftColor);
+                                        worksheet.Cell(row, col).Style.Fill.BackgroundColor = shiftColor;
+                                    }
+                                    catch
+                                    {
+                                        // If color parsing fails, skip setting the background
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Get all unique shift types from the schedule for statistics
+            var allShiftTypes = new HashSet<string>();
+            foreach (var kvp in schedule)
+            {
+                foreach (var staff in kvp.Value)
+                {
+                    if (!string.IsNullOrEmpty(staff.ShiftType))
+                    {
+                        allShiftTypes.Add(staff.ShiftType);
+                    }
+                }
+            }
+
+            // Also include "休息" as a special shift type for statistics
+            if (!allShiftTypes.Contains("休息"))
+            {
+                allShiftTypes.Add("休息");
+            }
+
+            // Add employee shift statistics to the RIGHT of the schedule data
+            int empStatsStartCol = colIndex; // Start after the schedule data
+            int empStatsStartRow = 1; // Start at the same row as schedule
+
+            worksheet.Cell(empStatsStartRow, empStatsStartCol).Value = "员工班次统计";
+            worksheet.Cell(empStatsStartRow, empStatsStartCol).Style.Font.Bold = true;
+            worksheet.Cell(empStatsStartRow, empStatsStartCol).Style.Fill.BackgroundColor = XLColor.LightBlue;
+
+            // Create headers for staff statistics (starting from the same relative column as dates)
+            int currentCol = empStatsStartCol;
+            int shiftTypeColStart = currentCol + 1; // Start shift type headers after the title
+
+            foreach (var shiftType in allShiftTypes.OrderBy(s => s))
+            {
+                worksheet.Cell(empStatsStartRow, shiftTypeColStart).Value = shiftType;
+                worksheet.Cell(empStatsStartRow, shiftTypeColStart).Style.Font.Bold = true;
+                worksheet.Cell(empStatsStartRow, shiftTypeColStart).Style.Fill.BackgroundColor = XLColor.LightGray;
+                shiftTypeColStart++;
+            }
+
+            // Add staff rows with count formulas
+            int empStatsRow = empStatsStartRow + 1;
+            var allStaffNames = allStaff.Values.Select(s => s.Name).OrderBy(n => n).ToList();
+
+            foreach (var staffName in allStaffNames)
+            {
+                // Add staff name in first column of the employee stats section
+                worksheet.Cell(empStatsRow, empStatsStartCol).Value = staffName;
+
+                // For each shift type, add a count formula
+                int shiftTypeCol = empStatsStartCol + 1;
+                foreach (var shiftType in allShiftTypes.OrderBy(s => s))
+                {
+                    // We'll create a formula that counts this specific staff member's occurrences of this shift type
+                    // For each date column (starting from column 4), check if the staff name matches and the shift type matches
+                    var dateColumnsFormula = "";
+                    for (int dateCol = 4; dateCol < colIndex; dateCol++)
+                    {
+                        var colLetter = GetExcelColumnName(dateCol);
+                        if (dateColumnsFormula != "")
+                            dateColumnsFormula += "+";
+                        dateColumnsFormula += $"(A2:A{rowIndex-1}=\"{staffName}\")*({colLetter}2:{colLetter}{rowIndex-1}=\"{shiftType}\")";
+                    }
+                    var formula = "=SUMPRODUCT(" + dateColumnsFormula + ")";
+
+                    worksheet.Cell(empStatsRow, shiftTypeCol).FormulaA1 = formula;
+                    shiftTypeCol++;
+                }
+
+                empStatsRow++;
+            }
+
+            // Add daily shift statistics section BELOW the schedule data (and employee stats if they're taller)
+            int dailyStatsStartRow = Math.Max(rowIndex, empStatsRow); // Start after the taller section
+
+            worksheet.Cell(dailyStatsStartRow, 1).Value = "每日班次统计";
+            worksheet.Cell(dailyStatsStartRow, 1).Style.Font.Bold = true;
+            worksheet.Cell(dailyStatsStartRow, 1).Style.Fill.BackgroundColor = XLColor.LightBlue;
+
+            // Create headers for daily statistics with alignment to original date columns
+            int dateHeaderCol = 4; // Start from the original date columns (D)
+            foreach (var dateHeader in dateHeaders)
+            {
+                // Convert date format back to MM-dd format for display
+                if (DateTime.TryParse(dateHeader, out DateTime date))
+                {
+                    worksheet.Cell(dailyStatsStartRow, dateHeaderCol).Value = date.ToString("MM-dd");
+                }
+                else
+                {
+                    worksheet.Cell(dailyStatsStartRow, dateHeaderCol).Value = dateHeader;
+                }
+                worksheet.Cell(dailyStatsStartRow, dateHeaderCol).Style.Font.Bold = true;
+                worksheet.Cell(dailyStatsStartRow, dateHeaderCol).Style.Fill.BackgroundColor = XLColor.LightGray;
+                dateHeaderCol++;
+            }
+
+            // Add shift type rows with count formulas
+            int dailyStatsRow = dailyStatsStartRow + 1;
+            foreach (var shiftType in allShiftTypes.OrderBy(s => s))
+            {
+                // Add shift type in first column
+                worksheet.Cell(dailyStatsRow, 1).Value = shiftType;
+
+                // For each date, add a count formula for this shift type
+                int dateColIndex = 4; // Start from the original date columns (D)
+                foreach (var dateStr in dateHeaders)
+                {
+                    // Count how many times this shift type appears in this specific date column
+                    var colLetter = GetExcelColumnName(dateColIndex);
+                    var formula = $"=COUNTIF({colLetter}2:{colLetter}{rowIndex-1},\"{shiftType}\")";
+
+                    worksheet.Cell(dailyStatsRow, dateColIndex).FormulaA1 = formula;
+                    dateColIndex++;
+                }
+
+                dailyStatsRow++;
+            }
+
             workbook.SaveAs(filePath);
+        }
+
+        private string GetExcelColumnName(int columnNumber)
+        {
+            // Convert a column number to an Excel column name (1 -> A, 2 -> B, ..., 27 -> AA, etc.)
+            string columnName = "";
+            while (columnNumber > 0)
+            {
+                columnNumber--;
+                int remainder = columnNumber % 26;
+                columnName = (char)(65 + remainder) + columnName;
+                columnNumber = (int)(columnNumber / 26);
+            }
+            return columnName;
         }
 
         public Dictionary<string, List<ScheduleExportModel>> ImportScheduleFromExcel(string filePath)
