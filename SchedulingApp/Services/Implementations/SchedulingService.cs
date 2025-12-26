@@ -387,11 +387,12 @@ namespace SchedulingApp.Services.Implementations
                             }
                         }
 
-                        // Rotate staff to ensure fair distribution
+                        // Rotate staff to ensure fair distribution by target shift type
                         var rotatedEligibleStaff = RotateStaffForFairDistribution(
                             unassignedEligibleStaff,
                             date,
-                            staffStats
+                            staffStats,
+                            shiftType
                         );
 
                         // Assign the needed number of people to this shift
@@ -832,15 +833,27 @@ namespace SchedulingApp.Services.Implementations
         private List<StaffModel> RotateStaffForFairDistribution(
             List<StaffModel> eligibleStaff,
             DateTime date,
-            Dictionary<string, StaffStatistics> staffStats
+            Dictionary<string, StaffStatistics> staffStats,
+            string? targetShiftType = null
         )
         {
             if (eligibleStaff.Count <= 1)
                 return eligibleStaff;
 
-            // Group staff by their total assigned shift count to maintain fairness
+            // Group staff by their count of the specific target shift type if provided,
+            // otherwise by their total assigned shift count for general fairness
             var staffGroups = eligibleStaff
-                .GroupBy(s => staffStats.ContainsKey(s.Name) ? staffStats[s.Name].TotalAssigned : 0)
+                .GroupBy(s =>
+                {
+                    if (targetShiftType != null && staffStats.ContainsKey(s.Name) && staffStats[s.Name].ShiftCounts.ContainsKey(targetShiftType))
+                    {
+                        return staffStats[s.Name].ShiftCounts[targetShiftType];
+                    }
+                    else
+                    {
+                        return staffStats.ContainsKey(s.Name) ? staffStats[s.Name].TotalAssigned : 0;
+                    }
+                })
                 .OrderBy(g => g.Key); // Order groups by shift count (ascending - fewer shifts first)
 
             var result = new List<StaffModel>();
@@ -974,11 +987,12 @@ namespace SchedulingApp.Services.Implementations
                         }
                     }
 
-                    // Rotate staff to ensure fair distribution
+                    // Rotate staff to ensure fair distribution by target shift type
                     var rotatedEligibleStaff = RotateStaffForFairDistribution(
                         eligibleStaff,
                         date,
-                        staffStats
+                        staffStats,
+                        shiftType
                     );
 
                     // Assign exactly the required count of this shift
@@ -1051,11 +1065,12 @@ namespace SchedulingApp.Services.Implementations
                         }
                     }
 
-                    // Rotate staff for fair distribution
+                    // Rotate staff for fair distribution by target shift type
                     var rotatedEligibleStaff = RotateStaffForFairDistribution(
                         eligibleStaff,
                         date,
-                        staffStats
+                        staffStats,
+                        shiftType
                     );
 
                     // Assign up to the required count (flexible assignment)
