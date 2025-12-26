@@ -606,16 +606,38 @@ namespace SchedulingApp.Services.Implementations
         )
         {
             var averageRestDays = (applicableStaff.Count * rules.TotalRestDays) / dateRange.Count;
-            var weekDayRestDays = averageRestDays - 1;
-            var holidayRestDays = averageRestDays + 2;
+            var weekDayRestDays = Math.Max(1, averageRestDays - 1); // 至少1人休息
+            var holidayRestDays = averageRestDays + 2; // 节假日休息人数更多
 
-            // For each employee, ensure their total "rest day equivalents" equal Rules.TotalRestDays
-            // Where "休息" counts as 1.0 day and shifts in Rules.HalfDayShifts count as 0.5 days
+            // 首先计算每个员工目前的休息日数量
+            var personRestDays = new Dictionary<string, int>();
             foreach (var person in applicableStaff)
             {
                 var personName = person.Name;
+                personRestDays[personName] = 0;
 
-                // Calculate the current rest day equivalents for this employee during the schedule period
+                foreach (var date in dateRange)
+                {
+                    var dateStr = date.ToString("yyyy-MM-dd");
+                    var shiftType = scheduleData[personName].Shifts[dateStr];
+
+                    if (shiftType == "休息")
+                    {
+                        personRestDays[personName]++;
+                    }
+                    else if (string.IsNullOrEmpty(shiftType))
+                    {
+                        // 未分配的日期可以考虑设为休息
+                        personRestDays[personName]++; // 先预设为可转换的休息日
+                    }
+                }
+            }
+
+            // 创建一个需要分配的休息日候选池，用于均匀分布
+            var restDayNeeds = new List<(string PersonName, int RequiredRestDays, int CurrentRestDays)>();
+            foreach (var person in applicableStaff)
+            {
+                var personName = person.Name;
                 double currentRestDayEquivalents = 0.0;
 
                 foreach (var date in dateRange)
@@ -635,66 +657,97 @@ namespace SchedulingApp.Services.Implementations
                 }
 
                 int targetRestDays = rules.TotalRestDays;
+                int currentRestDays = (int)currentRestDayEquivalents;
 
-                // Calculate the difference needed to reach the target
-                double difference = targetRestDays - currentRestDayEquivalents;
-
-                if (difference > 0)
+                if (targetRestDays > currentRestDays)
                 {
-                    // Need more rest day equivalents (can be achieved by adding rest days)
-                    // We'll focus on converting only non-priority work days to rest days to preserve priority requirements
-                    int restDaysNeeded = (int)Math.Ceiling(difference); // Round up to ensure we meet the requirement
-                    var canAssignedRestDates = new Dictionary<string, int>();
-                    var dateCanAssignedRest = new List<string>();
-                    // Convert some non-priority work days to rest days ("休息")
-                    foreach (var date in dateRange)
+                    restDayNeeds.Add((personName, targetRestDays, currentRestDays));
+                }
+            }
+
+            // 按当前休息日数量升序排列，优先为休息日少的员工分配
+            restDayNeeds = restDayNeeds.OrderBy(x => x.CurrentRestDays).ToList();
+
+            // 按日期逐一处理，以实现均匀分布
+            foreach (var date in dateRange)
+            {
+                var dateStr = date.ToString("yyyy-MM-dd");
+                var isHoliday = IsHoliday(date, rules);
+                var dailyMaxRestDays = isHoliday ? holidayRestDays : weekDayRestDays;
+
+                // 计算当日已有的休息人数
+                int currentDailyRestCount = 0;
+                foreach (var person in applicableStaff)
+                {
+                    if (scheduleData[person.Name].Shifts[dateStr] == "休息")
                     {
-                        if (staffStats[personName].ShiftCounts["休息"] >= targetRestDays)
-                            break;
+                        currentDailyRestCount++;
+                    }
+                }
 
-                        var dateStr = date.ToString("yyyy-MM-dd");
-                        var currentShift = scheduleData[personName].Shifts[dateStr];
+                // 如果当日休息人数已达到上限，跳过
+                if (currentDailyRestCount >= dailyMaxRestDays)
+                {
+                    continue;
+                }
 
-                        // Skip if already a rest day
-                        if (currentShift != "")
-                            continue;
+                // 确定当日还可以安排多少休息日
+                int remainingRestSlots = dailyMaxRestDays - currentDailyRestCount;
 
-                        // Check if it's a priority shift to avoid disrupting priority requirements
-                        var isHoliday = IsHoliday(date, rules);
-                        var shiftRequirements = isHoliday
-                            ? schedulingRule.HolidayShifts
-                            : schedulingRule.WeekdayShifts;
-                        var shiftRequirement = shiftRequirements.FirstOrDefault(sr =>
-                            sr.ShiftName == currentShift
-                        );
-                        //var dailyMaxRestDays = isHoliday ? holidayRestDays : weekDayRestDays;
-                        //if (dailyStats[dateStr].ShiftCounts["休息"] >= dailyMaxRestDays)
-                        //    break;
-
-                        canAssignedRestDates[dateStr] = CanAssignRestWithConsecutiveCheckAndStats(
+                // 对于当前需要休息的员工，按顺序尝试在该日期分配休息
+                var availablePeople = new List<(string PersonName, int RequiredRestDays, int CurrentRestDays)>();
+                foreach (var (personName, required, current) in restDayNeeds)
+                {
+                    // 如果该日期该员工已有非休息班次，则不能安排休息
+                    if (scheduleData[personName].Shifts[dateStr] == "")
+                    {
+                        // 确保为该员工安排休息后不会超过最大连续工作日限制
+                        if (CanAssignRestWithConsecutiveCheckAndStats(
                             personName,
                             date,
                             scheduleData,
                             rules,
                             existingSchedule,
-                            staffStats
-                        );
+                            staffStats) > 0)
+                        {
+                            availablePeople.Add((personName, required, current));
+                        }
+                    }
+                }
+
+                // 优先安排当前休息日较少的员工休息
+                var sortedAvailable = availablePeople.OrderBy(x =>
+                {
+                    // 计算该员工当前的总休息天数
+                    var totalCurrentRest = 0;
+                    foreach (var d in dateRange)
+                    {
+                        var dStr = d.ToString("yyyy-MM-dd");
+                        if (scheduleData[x.PersonName].Shifts[dStr] == "休息")
+                            totalCurrentRest++;
+                    }
+                    return totalCurrentRest; // 休息天数少的优先
+                }).ToList();
+
+                // 分配剩余休息名额，直到达到当日最大值或没有更多需要休息的员工
+                int assignedToday = 0;
+                foreach (var (personName, required, current) in sortedAvailable)
+                {
+                    if (assignedToday >= remainingRestSlots)
+                        break;
+
+                    // 再次检查该员工的休息总数，确保不超过要求
+                    var currentPersonRestCount = 0;
+                    foreach (var d in dateRange)
+                    {
+                        var dStr = d.ToString("yyyy-MM-dd");
+                        if (scheduleData[personName].Shifts[dStr] == "休息")
+                            currentPersonRestCount++;
                     }
 
-                    dateCanAssignedRest = canAssignedRestDates
-                        .OrderByDescending(kv => kv.Value)
-                        .Select(kv => kv.Key)
-                        .ToList();
-
-                    for (var i = 0; i < difference; i++)
+                    if (currentPersonRestCount < required)
                     {
-                        var dateStr = dateCanAssignedRest[i];
-
-                        if (!staffStats[personName].ShiftCounts.ContainsKey("休息"))
-                        {
-                            staffStats[personName].ShiftCounts["休息"] = 0;
-                        }
-                        // Assign rest
+                        // 分配休息
                         scheduleData[personName].Shifts[dateStr] = "休息";
                         UpdateStatisticsAfterAssignment(
                             personName,
@@ -705,10 +758,73 @@ namespace SchedulingApp.Services.Implementations
                             staffStats,
                             dailyStats
                         );
+                        assignedToday++;
+                    }
+                }
+            }
+
+            // 最后检查是否所有员工都达到了最低休息天数要求
+            foreach (var (personName, required, current) in restDayNeeds)
+            {
+                // 计算实际的总休息天数
+                int actualRestDays = 0;
+                foreach (var date in dateRange)
+                {
+                    var dateStr = date.ToString("yyyy-MM-dd");
+                    if (scheduleData[personName].Shifts[dateStr] == "休息")
+                    {
+                        actualRestDays++;
                     }
                 }
 
+                // 如果仍不足，需要进一步调整
+                if (actualRestDays < required)
+                {
+                    int neededRestDays = required - actualRestDays;
+                    // 尝试将非休息日转换为休息日
+                    var candidateDates = new List<DateTime>();
+                    foreach (var date in dateRange)
+                    {
+                        var dateStr = date.ToString("yyyy-MM-dd");
+                        var currentShift = scheduleData[personName].Shifts[dateStr];
 
+                        if (!string.IsNullOrEmpty(currentShift) && currentShift != "休息")
+                        {
+                            // 尝试转换此日为休息日，但需要检查约束
+                            var tempSchedule = new Dictionary<string, string>(scheduleData[personName].Shifts);
+                            tempSchedule[dateStr] = "休息";
+
+                            if (CheckMaxConsecutiveDaysConstraint(
+                                tempSchedule,
+                                rules.MaxConsecutiveDays,
+                                dateRange,
+                                personName,
+                                existingSchedule))
+                            {
+                                candidateDates.Add(date);
+                            }
+                        }
+                    }
+
+                    // 从候选日期中选择合适的日期转换为休息日
+                    foreach (var date in candidateDates.Take(neededRestDays))
+                    {
+                        var dateStr = date.ToString("yyyy-MM-dd");
+                        scheduleData[personName].Shifts[dateStr] = "休息";
+                        UpdateStatisticsAfterAssignment(
+                            personName,
+                            "休息",
+                            dateStr,
+                            rules,
+                            scheduleData,
+                            staffStats,
+                            dailyStats
+                        );
+                        actualRestDays++;
+                        if (actualRestDays >= required)
+                            break;
+                    }
+                }
             }
         }
 
