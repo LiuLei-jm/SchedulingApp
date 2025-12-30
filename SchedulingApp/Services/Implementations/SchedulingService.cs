@@ -614,7 +614,7 @@ namespace SchedulingApp.Services.Implementations
             }
 
             // 创建一个需要分配的休息日候选池，用于均匀分布
-            var restDayNeeds = new List<(string PersonName, int RequiredRestDays, int CurrentRestDays)>();
+            var restDayNeeds = new List<(string PersonName, double RequiredRestDays, double CurrentRestDays)>();
             foreach (var person in applicableStaff)
             {
                 var personName = person.Name;
@@ -675,7 +675,7 @@ namespace SchedulingApp.Services.Implementations
                 int remainingRestSlots = dailyMaxRestDays - currentDailyRestCount;
 
                 // 对于当前需要休息的员工，按顺序尝试在该日期分配休息
-                var availablePeople = new List<(string PersonName, int RequiredRestDays, int CurrentRestDays)>();
+                var availablePeople = new List<(string PersonName, double RequiredRestDays, double CurrentRestDays)>();
                 foreach (var (personName, required, current) in restDayNeeds)
                 {
                     // 如果该日期该员工已有非休息班次，则不能安排休息
@@ -699,12 +699,15 @@ namespace SchedulingApp.Services.Implementations
                 var sortedAvailable = availablePeople.OrderBy(x =>
                 {
                     // 计算该员工当前的总休息天数
-                    var totalCurrentRest = 0;
+                    double totalCurrentRest = 0;
                     foreach (var d in dateRange)
                     {
                         var dStr = d.ToString("yyyy-MM-dd");
-                        if (scheduleData[x.PersonName].Shifts[dStr] == "休息")
+                        var shift = scheduleData[x.PersonName].Shifts[dStr];
+                        if (shift == "休息")
                             totalCurrentRest++;
+                        if(rules.HalfDayShifts.Contains(shift))
+                            totalCurrentRest += 0.5;
                     }
                     return totalCurrentRest; // 休息天数少的优先
                 }).ToList();
@@ -717,12 +720,15 @@ namespace SchedulingApp.Services.Implementations
                         break;
 
                     // 再次检查该员工的休息总数，确保不超过要求
-                    var currentPersonRestCount = 0;
+                    double currentPersonRestCount = 0;
                     foreach (var d in dateRange)
                     {
                         var dStr = d.ToString("yyyy-MM-dd");
-                        if (scheduleData[personName].Shifts[dStr] == "休息")
+                        var shift = scheduleData[personName].Shifts[dStr];
+                        if (shift == "休息")
                             currentPersonRestCount++;
+                        else if(rules.HalfDayShifts.Contains(shift))
+                            currentPersonRestCount += 0.5;
                     }
 
                     if (currentPersonRestCount < required)
@@ -747,20 +753,23 @@ namespace SchedulingApp.Services.Implementations
             foreach (var (personName, required, current) in restDayNeeds)
             {
                 // 计算实际的总休息天数
-                int actualRestDays = 0;
+                double actualRestDays = 0;
                 foreach (var date in dateRange)
                 {
                     var dateStr = date.ToString("yyyy-MM-dd");
-                    if (scheduleData[personName].Shifts[dateStr] == "休息")
+                    var shift = scheduleData[personName].Shifts[dateStr];
+                    if (shift == "休息")
                     {
                         actualRestDays++;
                     }
+                    else if (rules.HalfDayShifts.Contains(shift))
+                        actualRestDays += GetShiftDayValue(shift,null);
                 }
 
                 // 如果仍不足，需要进一步调整
                 if (actualRestDays < required)
                 {
-                    int neededRestDays = required - actualRestDays;
+                    int neededRestDays = (int)Math.Ceiling(required - actualRestDays);
                     // 尝试将非休息日转换为休息日
                     var candidateDates = new List<DateTime>();
                     foreach (var date in dateRange)
