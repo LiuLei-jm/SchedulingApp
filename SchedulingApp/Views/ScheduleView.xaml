@@ -10,7 +10,7 @@
     xmlns:viewmodels="clr-namespace:SchedulingApp.ViewModels"
     d:DataContext="{d:DesignInstance Type=viewmodels:ScheduleViewModel}"
     d:DesignHeight="600"
-    d:DesignWidth="800"
+    d:DesignWidth="1000"
     mc:Ignorable="d">
     <UserControl.Resources>
         <Converters:ColorConverter x:Key="ColorConverter" />

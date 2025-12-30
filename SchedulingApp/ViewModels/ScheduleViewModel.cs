@@ -309,10 +309,8 @@ namespace SchedulingApp.ViewModels
 
                     foreach (var staff in staffList)
                     {
-                        // Use the shift color from the export model if available, otherwise fall back to loading from shifts
-                        var shiftColor = !string.IsNullOrEmpty(staff.ShiftColor)
-                            ? staff.ShiftColor
-                            : _dataService.LoadShifts().FirstOrDefault(s => s.ShiftName == staff.ShiftType)?.Color ?? "#FFFFFF";
+                        // Always use the shift color from Shifts.json configuration
+                        var shiftColor = _dataService.LoadShifts().FirstOrDefault(s => s.ShiftName == staff.ShiftType)?.Color ?? "#FFFFFF";
 
                         var scheduleItem = new ScheduleItemModel
                         {

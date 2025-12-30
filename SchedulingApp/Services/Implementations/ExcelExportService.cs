@@ -279,6 +279,11 @@ namespace SchedulingApp.Services.Implementations
 
                 // Read headers (row 1) to identify dates
                 var dateHeaders = new List<string>();
+                int dateColumnEnd = 3; // Start looking for dates in column D (index 4)
+
+                // We'll use a list to track dates as we parse them to handle cross-year scenarios
+                var parsedDateHeaders = new List<DateTime>();
+
                 for (int col = 4; col <= colCount; col++) // Start from column 4 (D)
                 {
                     var cell = worksheet.Cell(1, col);
@@ -289,14 +294,67 @@ namespace SchedulingApp.Services.Implementations
                         if (DateTime.TryParseExact(headerValue, "MM-dd", null, System.Globalization.DateTimeStyles.None, out DateTime date))
                         {
                             // We need to determine the year. For now, assume current year if date is reasonable
+                            // However, for year-end dates (December) and early-year dates (January), we need to be more sophisticated
+                            // to handle cross-year periods like Dec 22, 2025 to Jan 4, 2026 correctly
                             var currentDate = DateTime.Now;
                             var dateWithYear = new DateTime(currentDate.Year, date.Month, date.Day);
 
+                            // Handle cross-year scenarios: if we have previously parsed dates,
+                            // adjust years so that dates are consistent in the date range
+                            // This approach assumes that the schedule period is typically within a short period
+                            if (parsedDateHeaders.Count > 0)
+                            {
+                                // If we already have dates, try to maintain consistency with the existing date range
+                                var firstDate = parsedDateHeaders[0];
+                                var potentialDate = new DateTime(firstDate.Year, date.Month, date.Day);
+                                var potentialDateNextYear = new DateTime(firstDate.Year + 1, date.Month, date.Day);
+                                var potentialDatePrevYear = new DateTime(firstDate.Year - 1, date.Month, date.Day);
+
+                                // Choose the date that is closest to the existing date range
+                                var closestDate = potentialDate;
+                                var minDistance = Math.Abs((potentialDate - firstDate).Days);
+
+                                var nextYearDistance = Math.Abs((potentialDateNextYear - firstDate).Days);
+                                if (nextYearDistance < minDistance)
+                                {
+                                    minDistance = nextYearDistance;
+                                    closestDate = potentialDateNextYear;
+                                }
+
+                                var prevYearDistance = Math.Abs((potentialDatePrevYear - firstDate).Days);
+                                if (prevYearDistance < minDistance)
+                                {
+                                    minDistance = prevYearDistance;
+                                    closestDate = potentialDatePrevYear;
+                                }
+
+                                dateWithYear = closestDate;
+                            }
+                            else
+                            {
+                                // For the first date, use current year but check if it might be a cross-year scenario
+                                dateWithYear = new DateTime(currentDate.Year, date.Month, date.Day);
+
+                                // If it's January and we're still early in the year, this date might be from last year
+                                if (date.Month == 1 && currentDate.Month >= 10) // October, November, December
+                                {
+                                    dateWithYear = new DateTime(currentDate.Year - 1, date.Month, date.Day);
+                                }
+                                // If it's December and we're early in the year, this date might be from next year
+                                else if (date.Month == 12 && currentDate.Month <= 3) // January, February, March
+                                {
+                                    dateWithYear = new DateTime(currentDate.Year + 1, date.Month, date.Day);
+                                }
+                            }
+
                             dateHeaders.Add(dateWithYear.ToString("yyyy-MM-dd"));
+                            parsedDateHeaders.Add(dateWithYear); // Track for cross-year logic
+                            dateColumnEnd = col; // Track the end of date columns
                         }
                         else
                         {
-                            dateHeaders.Add(headerValue); // Keep as is if not a valid date
+                            // If this is not a date format, we've reached the statistics section
+                            break; // Stop reading date headers here
                         }
                     }
                     else
@@ -305,7 +363,7 @@ namespace SchedulingApp.Services.Implementations
                     }
                 }
 
-                // Process data rows (start from row 2)
+                // Process data rows (start from row 2) until we reach the statistics section
                 for (int row = 2; row <= rowCount; row++)
                 {
                     var nameCell = worksheet.Cell(row, 1);
@@ -317,6 +375,20 @@ namespace SchedulingApp.Services.Implementations
 
                     if (string.IsNullOrEmpty(name))
                         continue; // Skip empty rows
+
+                    // Check if we've reached the "员工班次统计" or "每日班次统计" section by checking if the name cell matches
+                    if (name.Equals("员工班次统计", StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals("每日班次统计", StringComparison.OrdinalIgnoreCase))
+                        break; // Stop processing at statistics section
+
+                    // Additional check: if we're in the statistics section, the cells might contain numbers instead of staff names
+                    // Skip rows that appear to be statistics by checking if the second column is a number
+                    //if (double.TryParse(id, out _))
+                    //{
+                        // This might be a statistics row, check if this is likely a staff ID or a count
+                        // If it's just a count value without a proper name, skip it
+                        //continue;
+                    //}
 
                     // Process each date column
                     for (int colIndex = 0; colIndex < dateHeaders.Count; colIndex++)
@@ -340,7 +412,8 @@ namespace SchedulingApp.Services.Implementations
                             Name = name,
                             Id = id,
                             Group = group,
-                            ShiftType = shiftValue
+                            ShiftType = shiftValue,
+                            ShiftColor = "" // Don't import color from Excel, use system configuration instead
                         });
                     }
                 }
