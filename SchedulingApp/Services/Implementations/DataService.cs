@@ -184,7 +184,9 @@ namespace SchedulingApp.Services.Implementations
                 WriteIndented = true,
                 Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
             };
-            var json = JsonSerializer.Serialize(schedule, options);
+            var existingSchedule = LoadSchedule();
+            existingSchedule.AddRange(schedule.Where(s => !existingSchedule.Any(es => es.Date == s.Date && es.PersonName == s.PersonName)));
+            var json = JsonSerializer.Serialize(existingSchedule, options);
             File.WriteAllText(_scheduleFile, json);
         }
     }

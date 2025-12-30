@@ -1,5 +1,6 @@
 using SchedulingApp.Models;
 using SchedulingApp.Services.Interfaces;
+using System.Windows;
 
 namespace SchedulingApp.Services.Implementations
 {
@@ -149,29 +150,16 @@ namespace SchedulingApp.Services.Implementations
             }
             else
             {
+                MessageBox.Show("没有定义排班规则，请先设置规则。");
                 // Fallback to old weekday/holiday rules if new rules aren't available
-                ProcessOldStyleRulesWithFullRequirements(
-                    scheduleData,
-                    dateRange,
-                    staffs,
-                    shifts,
-                    rules,
-                    existingSchedule
-                );
-            }
-
-            // Handle any completely unassigned dates - assign default shifts based on rules
-            foreach (var personName in scheduleData.Keys)
-            {
-                foreach (var date in dateRange)
-                {
-                    var dateStr = date.ToString("yyyy-MM-dd");
-                    if (scheduleData[personName].Shifts[dateStr] == "")
-                    {
-                        // Default to rest if no assignment was made
-                        scheduleData[personName].Shifts[dateStr] = "休息";
-                    }
-                }
+                //ProcessOldStyleRulesWithFullRequirements(
+                //    scheduleData,
+                //    dateRange,
+                //    staffs,
+                //    shifts,
+                //    rules,
+                //    existingSchedule
+                //);
             }
 
             return scheduleData;
@@ -195,13 +183,13 @@ namespace SchedulingApp.Services.Implementations
             var allScheduleItems = _dataService.LoadSchedule();
 
             // Get schedule items that are before the start date
-            var dateBeforeStart = startDate.AddDays(-1); // Include the day before start date
+            var dateBeforeStart = startDate.AddDays(-7); // Include the day before start date
             var itemsBeforeStart = allScheduleItems
                 .Where(item =>
                 {
                     if (DateTime.TryParse(item.Date, out DateTime itemDate))
                     {
-                        return itemDate < startDate;
+                        return dateBeforeStart <= itemDate && itemDate < startDate;
                     }
                     return false;
                 })
@@ -296,7 +284,7 @@ namespace SchedulingApp.Services.Implementations
                 dailyStats
             );
 
-            
+
 
             // THIRD LOOP: Fill remaining unassigned slots with non-priority shifts
             ProcessNonPriorityShifts(
@@ -512,16 +500,7 @@ namespace SchedulingApp.Services.Implementations
                         // Check if the next date is unassigned and can be assigned the same half-day shift
                         if (
                             scheduleData[personName].Shifts[dateStr] == ""
-                            && CanAssignShiftWithConsecutiveCheckAndStats(
-                                personName,
-                                shiftType,
-                                nextDate,
-                                scheduleData,
-                                shifts,
-                                rules,
-                                existionSchedule
-                            )
-                        )
+                                                    )
                         {
                             // Assign the same half-day shift to the next date
                             scheduleData[personName].Shifts[dateStr] = shiftType;
