@@ -1,3 +1,4 @@
+using SchedulingApp.Helpers;
 using SchedulingApp.Models;
 using SchedulingApp.Services.Interfaces;
 using System.IO;
@@ -54,16 +55,18 @@ namespace SchedulingApp.Services.Implementations
 
         public List<ShiftModel> LoadShifts()
         {
+            List<ShiftModel> loadedShifts;
+
             if (File.Exists(_shiftsFile))
             {
                 var json = File.ReadAllText(_shiftsFile);
                 var shifts = JsonSerializer.Deserialize<List<ShiftModel>>(json);
-                return shifts ?? new List<ShiftModel>();
+                loadedShifts = shifts ?? new List<ShiftModel>();
             }
-
-            // 默认班次数据
-            return new List<ShiftModel>
+            else
             {
+                // 默认班次数据 (excluding "休息" which is a default program value)
+                loadedShifts = new List<ShiftModel>
                 {
                     new ShiftModel
                     {
@@ -71,86 +74,92 @@ namespace SchedulingApp.Services.Implementations
                         StartTime = "08:00",
                         EndTime = "12:00",
                         Color = "#FFD700",
-                    }
-                },
-                {
+                    },
                     new ShiftModel
                     {
                         ShiftName =  "甲2",
                         StartTime = "08:00",
                         EndTime = "17:00",
                         Color = "#FFA07A",
-                    }
-                },
-                {
-
+                    },
                     new ShiftModel
                     {
                         ShiftName = "乙1",
                         StartTime = "08:30",
                         EndTime = "17:30",
                         Color = "#87CEFA",
-                    }
-                },
-                {
-
+                    },
                     new ShiftModel
                     {
                         ShiftName = "乙2",
                         StartTime = "09:30",
                         EndTime = "18:30",
                         Color = "#98FB98",
-                    }
-                },
-                {
-
+                    },
                     new ShiftModel
                     {
                         ShiftName = "丙",
                         StartTime = "12:00",
                         EndTime = "21:00",
                         Color = "#DDA0DD",
-                    }
-                },
-                {
+                    },
+                };
+            }
 
-                    new ShiftModel
-                    {
-                        ShiftName = "休息",
-                        StartTime = "",
-                        EndTime = "",
-                        Color = "#D3D3D3",
-                    }
-                },
-            };
+            // Always add rest shift as a default shift that should not be saved to the file
+            var rules = LoadRules();
+            if (!loadedShifts.Any(s => s.ShiftName == rules.RestShiftName))
+            {
+                loadedShifts.Add(new ShiftModel
+                {
+                    ShiftName = rules.RestShiftName,
+                    StartTime = "",
+                    EndTime = "",
+                    Color = "#D3D3D3",
+                });
+            }
+
+            return loadedShifts;
         }
 
         public void SaveShifts(List<ShiftModel> shifts)
         {
+            // Filter out the rest shift since it should be a default program value that's not persisted
+            var rules = LoadRules();
+            var shiftsToSave = shifts.Where(s => s.ShiftName != rules.RestShiftName).ToList();
+
             var options = new JsonSerializerOptions
             {
                 WriteIndented = true,
                 Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
             };
-            var json = JsonSerializer.Serialize(shifts, options);
+            var json = JsonSerializer.Serialize(shiftsToSave, options);
             File.WriteAllText(_shiftsFile, json);
         }
 
         public RulesModel LoadRules()
         {
+            RulesModel rules;
             if (File.Exists(_rulesFile))
             {
                 var json = File.ReadAllText(_rulesFile);
-                var rules = JsonSerializer.Deserialize<RulesModel>(json);
-                return rules ?? new RulesModel();
+                rules = JsonSerializer.Deserialize<RulesModel>(json);
+                rules = rules ?? new RulesModel();
+            }
+            else
+            {
+                // 默认规则数据
+                rules = new RulesModel
+                {
+                    MaxConsecutiveDays = 5,
+                    TotalRestDays = 4,
+                };
             }
 
-            // 默认规则数据
-            return new RulesModel
-            {
-                MaxConsecutiveDays = 5,
-                TotalRestDays = 4,
-            };
+            // Update RulesHelper with current rules
+            RulesHelper.CurrentRules = rules;
+
+            return rules;
         }
 
         public void SaveRules(RulesModel rules)
@@ -162,6 +171,9 @@ namespace SchedulingApp.Services.Implementations
             };
             var json = JsonSerializer.Serialize(rules, options);
             File.WriteAllText(_rulesFile, json);
+
+            // Update RulesHelper with current rules
+            RulesHelper.CurrentRules = rules;
         }
 
         public string ScheduleFile => _scheduleFile;
@@ -186,7 +198,9 @@ namespace SchedulingApp.Services.Implementations
                 WriteIndented = true,
                 Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
             };
-            var json = JsonSerializer.Serialize(schedule, options);
+            var existingSchedule = LoadSchedule();
+            existingSchedule.AddRange(schedule.Where(s => !existingSchedule.Any(es => es.Date == s.Date && es.PersonName == s.PersonName)));
+            var json = JsonSerializer.Serialize(existingSchedule, options);
             File.WriteAllText(_scheduleFile, json);
         }
     }

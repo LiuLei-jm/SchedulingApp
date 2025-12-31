@@ -9,6 +9,46 @@
                 <ResourceDictionary Source="pack://application:,,,/HandyControl;component/Themes/SkinDefault.xaml"/>
                 <ResourceDictionary Source="pack://application:,,,/HandyControl;component/Themes/Theme.xaml"/>
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Safe Validation Error Template to avoid ArgumentOutOfRangeException -->
+            <ControlTemplate x:Key="ValidationTemplate">
+                <Grid>
+                    <AdornedElementPlaceholder />
+                    <!-- Use a simpler visual indicator instead of direct error text access -->
+                    <Ellipse Width="10" Height="10" Margin="2,0,0,0" VerticalAlignment="Top" HorizontalAlignment="Right"
+                             Fill="Red" Stroke="DarkRed" StrokeThickness="1"
+                             Visibility="{Binding RelativeSource={RelativeSource Self},
+                                         Path=AdornedElement.(Validation.HasError),
+                                         Converter={StaticResource BooleanToVisibilityConverter}}" />
+                </Grid>
+            </ControlTemplate>
+
+            <!-- Apply safe validation template globally -->
+            <Style x:Key="{x:Static SystemParameters.FocusVisualStyleKey}"
+                   TargetType="{x:Type Style}">
+                <Setter Property="Control.Template">
+                    <Setter.Value>
+                        <ControlTemplate>
+                            <Rectangle Margin="0" StrokeThickness="1"
+                                       Stroke="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"
+                                       StrokeDashArray="1 2" SnapsToDevicePixels="True"/>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Converter for boolean visibility -->
+            <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+
+
+            <!-- Default validation error template style -->
+            <Style TargetType="Control">
+                <Style.Triggers>
+                    <Trigger Property="Validation.HasError" Value="True">
+                        <Setter Property="Validation.ErrorTemplate" Value="{StaticResource ValidationTemplate}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

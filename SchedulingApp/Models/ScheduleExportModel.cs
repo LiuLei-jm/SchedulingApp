@@ -1,5 +1,3 @@
-using CommunityToolkit.Mvvm.ComponentModel;
-
 namespace SchedulingApp.Models
 {
     public class ScheduleExportModel
@@ -8,5 +6,6 @@ namespace SchedulingApp.Models
         public string Id { get; set; } = string.Empty;
         public string Group { get; set; } = string.Empty;
         public string ShiftType { get; set; } = string.Empty;  // Add shift type to the export model
+        public string ShiftColor { get; set; } = string.Empty; // Add shift color to the export model
     }
 }

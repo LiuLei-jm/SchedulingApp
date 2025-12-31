@@ -1,10 +1,11 @@
-using System.Collections.ObjectModel;
-using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HandyControl.Controls;
+using SchedulingApp.Helpers;
 using SchedulingApp.Models;
 using SchedulingApp.Services.Interfaces;
+using System.Collections.ObjectModel;
+using System.Windows;
 
 namespace SchedulingApp.ViewModels
 {
@@ -59,6 +60,9 @@ namespace SchedulingApp.ViewModels
         [ObservableProperty]
         private bool _canExport = false;
 
+        [ObservableProperty]
+        private bool _canUpload = true;
+
         // 命令
         [RelayCommand]
         private void GenerateSchedule()
@@ -70,179 +74,15 @@ namespace SchedulingApp.ViewModels
 
                 var rules = _dataService.LoadRules();
                 // Auto-populate weekends if CustomHolidays is empty
-                rules.CustomHolidays.Clear();
                 FillWeekendsIfEmpty(rules, StartDate, EndDate);
-                var scheduleResult = _schedulingService.GenerateSchedule(
-                    staffList,
-                    shiftList,
-                    rules,
-                    StartDate.Month,
-                    StartDate.Year
-                );
-                if (!string.IsNullOrEmpty(scheduleResult.errorMessage))
-                {
-                    throw new Exception(scheduleResult.errorMessage);
-                }
-                // Convert the result to the expected format
-                var scheduleData = new Dictionary<string, ScheduleDataModel>();
-                foreach (var dateStaffList in scheduleResult.schedule)
-                {
-                    var dateStr = dateStaffList.Key;
-                    var staffForDate = dateStaffList.Value;
-                    foreach (var staff in staffForDate)
-                    {
-                        if (!scheduleData.ContainsKey(staff.Name))
-                        {
-                            scheduleData[staff.Name] = new ScheduleDataModel
-                            {
-                                Id = staff.Id,
-                                Group = staff.Group,
-                                Shifts = new Dictionary<string, string>(),
-                            };
-                        }
-                        // Find the actual shift assigned to this person on this date
-                        // This requires finding the original schedule data which maps person -> date -> shift
-                        // We need to reverse the mapping from date -> [people] to person -> [dates]
-
-                        // We'll rebuild the scheduleData from the original scheduling service result
-                        // We need to get the actual schedule from the scheduling service in person->date format
-                    }
-                }
-
-                // Get updated schedule data from the service result in the correct format
-                // Rebuild the scheduleData based on the original service result
-                scheduleData.Clear();
-
-                // Build the scheduleData from the original person-based format
-                // We need to call the scheduling service and get data in person->date format
-                var staffScheduleData = new Dictionary<string, ScheduleDataModel>();
-                foreach (var person in staffList)
-                {
-                    staffScheduleData[person.Name] = new ScheduleDataModel
-                    {
-                        Id = person.Id,
-                        Group = person.Group,
-                        Shifts = new Dictionary<string, string>(),
-                    };
-                }
-
-                // Convert the result format to match our expected structure
-                // The scheduleResult contains date -> list of staff for that date
-                // We need to convert it to person -> shifts
-                foreach (var dateStaffList in scheduleResult.schedule)
-                {
-                    var dateStr = dateStaffList.Key;
-                    var staffForDate = dateStaffList.Value;
-
-                    foreach (var staff in staffForDate)
-                    {
-                        if (!staffScheduleData.ContainsKey(staff.Name))
-                        {
-                            staffScheduleData[staff.Name] = new ScheduleDataModel
-                            {
-                                Id = staff.Id,
-                                Group = staff.Group,
-                                Shifts = new Dictionary<string, string>(),
-                            };
-                        }
-
-                        // We need to find what shift this person was assigned on this date
-                        // Since the service result doesn't include shift info, we need to get it
-                        // This is a limitation of the current service interface
-                        // Let's assume we get the shift info differently
-                    }
-                }
-
-                // For the new table format, we need to recreate the schedule data properly
-                // Call the scheduling service again but get the full schedule data
-                var fullScheduleResult = _schedulingService.GenerateSchedule(
-                    staffList,
-                    shiftList,
-                    rules,
-                    StartDate.Month,
-                    StartDate.Year
-                );
-
-                // We need to build the person-based schedule from the service result
-                // The service returns date -> [staff assigned to that date], but we need person -> [their shifts]
-                // Since the current service doesn't return shift type, we need to get the full schedule data
-                // from the scheduling service in person-based format.
-
-                // Let's create a new method in the scheduling service to get the person-based schedule
-                // For now, I'll update the service to return additional information
-                _currentScheduleData = new Dictionary<string, ScheduleDataModel>();
-
-                // Initialize schedule data for each staff member
-                foreach (var person in staffList)
-                {
-                    _currentScheduleData[person.Name] = new ScheduleDataModel
-                    {
-                        Id = person.Id,
-                        Group = person.Group,
-                        Shifts = new Dictionary<string, string>(),
-                    };
-                }
-
-                // Process each date in the result to map back to person -> shift
-                var dateRange = new List<DateTime>();
-                var currentDate = StartDate.Date;
-                while (currentDate <= EndDate.Date)
-                {
-                    dateRange.Add(currentDate);
-                    currentDate = currentDate.AddDays(1);
-                }
-
-                // Initialize all dates for each staff member with empty values
-                foreach (var person in staffList)
-                {
-                    foreach (var date in dateRange)
-                    {
-                        var dateStr = date.ToString("yyyy-MM-dd");
-                        _currentScheduleData[person.Name].Shifts[dateStr] = ""; // Initialize with empty
-                    }
-                }
-
-                // Now we need to get the actual shifts from the service
-                // Since the service now uses the new algorithm with proper data structures,
-                // we need to call a method that returns the person-based schedule
-                // For this, I'll need to update the service to return the full schedule data
-                // but for now, let's assume the SchedulingService is updated to include the full schedule data
-
-                // Since the GenerateSchedule method returns date -> [staff], we need to reverse this mapping
-                // to person -> [shifts]. For this to work properly, we need the scheduling service to return
-                // the shift type information as well.
-
-                // For now, let's assume the service provides the full schedule data
-                // We'll need to make sure the SchedulingService returns the correct data format
-
-                // Process each date from the schedule result to extract the staff assignments
-                foreach (var dateEntry in scheduleResult.schedule)
-                {
-                    var dateStr = dateEntry.Key;
-                    var assignedStaffList = dateEntry.Value;
-
-                    // For each staff member assigned on this date, we need to determine their shift
-                    // This requires updating the service to return shift information properly
-                    foreach (var assignedStaff in assignedStaffList)
-                    {
-                        // In our new service implementation, we should have the shift information
-                        // For now, let's try to use the original algorithm result structure
-                        // This requires modifying the service to return person-based schedule data
-                    }
-                }
-
-                // For now, let's update the service to provide the full person-based schedule data
-                // by calling the internal algorithm directly to get the person-based schedule
-                var internalScheduleData = GetPersonBasedScheduleData(
+                // Use the new person-based schedule generation method
+                _currentScheduleData = _schedulingService.GeneratePersonBasedSchedule(
                     staffList,
                     shiftList,
                     rules,
                     StartDate,
                     EndDate
                 );
-
-                // Copy the data to our current schedule
-                _currentScheduleData = internalScheduleData;
 
                 // Clear the old format data
                 ScheduleItems.Clear();
@@ -252,7 +92,7 @@ namespace SchedulingApp.ViewModels
                 DateHeaders.Clear();
 
                 // Add date headers
-                currentDate = StartDate;
+                var currentDate = StartDate;
                 while (currentDate <= EndDate)
                 {
                     DateHeaders.Add(currentDate.ToString("MM-dd"));
@@ -361,49 +201,6 @@ namespace SchedulingApp.ViewModels
             }
         }
 
-        private Dictionary<string, ScheduleDataModel> GetPersonBasedScheduleData(
-            List<StaffModel> staff,
-            List<ShiftModel> shifts,
-            RulesModel rules,
-            DateTime startDate,
-            DateTime endDate
-        )
-        {
-            // Call the new public method in SchedulingService through the interface
-            if (_schedulingService is ISchedulingService schedulingService)
-            {
-                return schedulingService.GeneratePersonBasedSchedule(
-                    staff,
-                    shifts,
-                    rules,
-                    startDate,
-                    endDate
-                );
-            }
-
-            // Fallback to empty schedule if method not available
-            var emptySchedule = new Dictionary<string, ScheduleDataModel>();
-            foreach (var person in staff)
-            {
-                emptySchedule[person.Name] = new ScheduleDataModel
-                {
-                    Id = person.Id,
-                    Group = person.Group,
-                    Shifts = new Dictionary<string, string>(),
-                };
-
-                // Initialize with empty shifts for all dates
-                var currentDate = startDate;
-                while (currentDate <= endDate)
-                {
-                    var dateStr = currentDate.ToString("yyyy-MM-dd");
-                    emptySchedule[person.Name].Shifts[dateStr] = "";
-                    currentDate = currentDate.AddDays(1);
-                }
-            }
-
-            return emptySchedule;
-        }
 
         [RelayCommand(CanExecute = nameof(CanExportSchedule))]
         private void ExportSchedule()
@@ -463,7 +260,8 @@ namespace SchedulingApp.ViewModels
                                                     Name = staff.Name,
                                                     Id = staff.Id,
                                                     Group = staff.Group,
-                                                    ShiftType = shiftInfo.ShiftName  // Include the actual shift type
+                                                    ShiftType = shiftInfo.ShiftName,  // Include the actual shift type
+                                                    ShiftColor = shiftInfo.ShiftColor  // Include the shift color
                                                 }
                                             );
                                     }
@@ -497,6 +295,7 @@ namespace SchedulingApp.ViewModels
             }
         }
 
+        // Overload for date-based schedule
         private void SaveScheduleToJSON(Dictionary<string, List<ScheduleExportModel>> scheduleForExport)
         {
             try
@@ -511,8 +310,8 @@ namespace SchedulingApp.ViewModels
 
                     foreach (var staff in staffList)
                     {
-                        var shiftModel = _dataService.LoadShifts().FirstOrDefault(s => s.ShiftName == staff.ShiftType);
-                        var shiftColor = shiftModel?.Color ?? "#FFFFFF";
+                        // Always use the shift color from Shifts.json configuration
+                        var shiftColor = _dataService.LoadShifts().FirstOrDefault(s => s.ShiftName == staff.ShiftType)?.Color ?? "#FFFFFF";
 
                         var scheduleItem = new ScheduleItemModel
                         {
@@ -538,7 +337,229 @@ namespace SchedulingApp.ViewModels
             }
         }
 
+        private void SaveScheduleToJSON(Dictionary<string, ScheduleDataModel> scheduleData)
+        {
+            try
+            {
+                // Convert the person-based schedule data to ScheduleItemModel format for saving
+                var scheduleItems = new List<ScheduleItemModel>();
+
+                foreach (var personEntry in scheduleData)
+                {
+                    var personName = personEntry.Key;
+                    var personSchedule = personEntry.Value;
+
+                    foreach (var dateShift in personSchedule.Shifts)
+                    {
+                        var dateStr = dateShift.Key;
+                        var shiftName = dateShift.Value;
+
+                        // Only add non-empty shifts
+                        if (!string.IsNullOrEmpty(shiftName))
+                        {
+                            var shiftModel = _dataService.LoadShifts().FirstOrDefault(s => s.ShiftName == shiftName);
+                            var shiftColor = shiftModel?.Color ?? "#FFFFFF";
+
+                            var scheduleItem = new ScheduleItemModel
+                            {
+                                Date = dateStr,
+                                Shift = shiftName,
+                                PersonName = personName,
+                                ShiftColor = shiftColor
+                            };
+
+                            scheduleItems.Add(scheduleItem);
+                        }
+                    }
+                }
+
+                // Use the DataService to save the schedule to JSON
+                _dataService.SaveSchedule(scheduleItems);
+
+                Console.WriteLine($"排班数据已保存到: {_dataService.ScheduleFile}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"保存排班数据到JSON失败: {ex.Message}");
+                Growl.ErrorGlobal($"保存排班数据到JSON失败: {ex.Message}");
+            }
+        }
+
         private bool CanExportSchedule() => CanExport;
+
+        [RelayCommand(CanExecute = nameof(CanUploadSchedule))]
+        private void UploadSchedule()
+        {
+            try
+            {
+                var openFileDialog = new Microsoft.Win32.OpenFileDialog
+                {
+                    Filter = "Excel files (*.xlsx)|*.xlsx|All files (*.*)|*.*",
+                    Title = "选择要上传的排班表文件"
+                };
+
+                if (openFileDialog.ShowDialog() == true)
+                {
+                    // Load the schedule from Excel file using the Excel export service
+                    var scheduleData = _excelExportService.ImportScheduleFromExcel(openFileDialog.FileName);
+
+                    if (scheduleData == null || scheduleData.Count == 0)
+                    {
+                        Growl.InfoGlobal("文件中没有找到有效的排班数据");
+                        return;
+                    }
+
+                    // Get the date range from the imported data
+                    var allDates = new List<DateTime>();
+                    foreach (var dateEntry in scheduleData)
+                    {
+                        if (DateTime.TryParse(dateEntry.Key, out DateTime date))
+                        {
+                            allDates.Add(date);
+                        }
+                    }
+
+                    if (allDates.Count == 0)
+                    {
+                        Growl.InfoGlobal("未能解析排班数据中的日期");
+                        return;
+                    }
+
+                    var startDate = allDates.Min();
+                    var endDate = allDates.Max();
+
+                    // Update the date range properties
+                    StartDate = startDate;
+                    EndDate = endDate;
+
+                    // Convert to person-based schedule for display
+                    var staffList = StaffData.ToList();
+                    var shiftList = _dataService.LoadShifts();
+
+                    var scheduleDataForDisplay = new Dictionary<string, ScheduleDataModel>();
+
+                    // Initialize schedule for each staff member
+                    foreach (var person in staffList)
+                    {
+                        scheduleDataForDisplay[person.Name] = new ScheduleDataModel
+                        {
+                            Id = person.Id,
+                            Group = person.Group,
+                            Shifts = new Dictionary<string, string>()
+                        };
+
+                        // Initialize all dates as empty
+                        var currentDate = startDate;
+                        while (currentDate <= endDate)
+                        {
+                            var dateStr = currentDate.ToString("yyyy-MM-dd");
+                            scheduleDataForDisplay[person.Name].Shifts[dateStr] = string.Empty;
+                            currentDate = currentDate.AddDays(1);
+                        }
+                    }
+
+                    // Fill in the actual schedule data
+                    foreach (var dateEntry in scheduleData)
+                    {
+                        var dateStr = dateEntry.Key;
+                        var assignedStaff = dateEntry.Value;
+
+                        foreach (var staff in assignedStaff)
+                        {
+                            // Find the staff in our staff data
+                            var matchingStaff = staffList.FirstOrDefault(s => s.Name == staff.Name);
+                            if (matchingStaff != null && scheduleDataForDisplay.ContainsKey(matchingStaff.Name))
+                            {
+                                scheduleDataForDisplay[matchingStaff.Name].Shifts[dateStr] = staff.ShiftType;
+                            }
+                        }
+                    }
+
+                    // Update the current schedule data
+                    _currentScheduleData = scheduleDataForDisplay;
+
+                    // Clear existing data
+                    ScheduleItems.Clear();
+                    StaffWithSchedules.Clear();
+                    DateHeaders.Clear();
+
+                    // Add date headers
+                    var current = startDate;
+                    while (current <= endDate)
+                    {
+                        DateHeaders.Add(current.ToString("MM-dd"));
+                        current = current.AddDays(1);
+                    }
+
+                    // Add staff rows with their schedules
+                    foreach (var person in staffList)
+                    {
+                        if (scheduleDataForDisplay.ContainsKey(person.Name))
+                        {
+                            var staffRow = new StaffScheduleRow
+                            {
+                                Name = person.Name,
+                                Id = person.Id,
+                                Group = person.Group,
+                            };
+
+                            // Add each date's shift for this person
+                            current = startDate;
+                            while (current <= endDate)
+                            {
+                                var dateStr = current.ToString("yyyy-MM-dd");
+                                var dateHeader = current.ToString("MM-dd");
+
+                                var shiftName = scheduleDataForDisplay[person.Name].Shifts.ContainsKey(dateStr)
+                                    ? scheduleDataForDisplay[person.Name].Shifts[dateStr]
+                                    : "";
+
+                                var shiftColor = shiftName != ""
+                                    ? shiftList.FirstOrDefault(s => s.ShiftName == shiftName)?.Color
+                                        ?? "#FFFFFF"
+                                    : "#FFFFFF";
+
+                                staffRow.DateShifts[dateHeader] = new ScheduleShiftInfo
+                                {
+                                    ShiftName = shiftName,
+                                    ShiftColor = shiftColor,
+                                };
+
+                                current = current.AddDays(1);
+                            }
+
+                            StaffWithSchedules.Add(staffRow);
+                        }
+                    }
+
+                    // Trigger property changed for both collections to ensure UI updates
+                    OnPropertyChanged(nameof(DateHeaders));
+                    OnPropertyChanged(nameof(StaffWithSchedules));
+                    OnPropertyChanged(nameof(StartDate));
+                    OnPropertyChanged(nameof(EndDate));
+
+                    CanExport = true;
+                    OnPropertyChanged(nameof(CanExport));
+                    ExportScheduleCommand.NotifyCanExecuteChanged();
+
+                    // Update statistics after schedule is loaded
+                    UpdateStatistics();
+
+                    // Save schedule data to JSON file as well
+                    SaveScheduleToJSON(scheduleDataForDisplay);
+
+                    // Success notification
+                    Growl.InfoGlobal("排班表上传成功！");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"上传排班表失败: {ex.Message}");
+                Growl.ErrorGlobal($"上传排班表失败: {ex.Message}");
+            }
+        }
+
+        private bool CanUploadSchedule() => CanUpload;
 
         [RelayCommand]
         private void ClearSchedule()
@@ -570,6 +591,7 @@ namespace SchedulingApp.ViewModels
             // Only populate if the collection is empty
             if (rules.CustomHolidays.Count == 0)
             {
+                rules.CustomHolidays.Clear();
                 var currentDate = startDate.Date;
                 while (currentDate <= endDate.Date)
                 {
@@ -662,8 +684,7 @@ namespace SchedulingApp.ViewModels
                             var shiftInfo = staffRow.DateShifts[dateHeader];
                             if (shiftInfo.ShiftName == shiftType)
                             {
-                                // If this is a half-day shift, count as 0.5, otherwise as 1
-                                count += halfDayShifts.Contains(shiftType) ? 0.5 : 1.0;
+                                count += 1.0;
                             }
                         }
                     }
@@ -676,7 +697,7 @@ namespace SchedulingApp.ViewModels
             // Add rest days statistics (empty shifts) - only add this if there are rest days
             var restStat = new DailyShiftStats
             {
-                ShiftType = "休息",
+                ShiftType = RulesHelper.GetRestShiftName(),
                 DateCounts = new Dictionary<string, double>(),
             };
 
@@ -715,13 +736,14 @@ namespace SchedulingApp.ViewModels
                     if (staffRow.DateShifts.ContainsKey(dateHeader))
                     {
                         var shiftInfo = staffRow.DateShifts[dateHeader];
+                        var currentRules = _dataService.LoadRules();
                         if (
                             !string.IsNullOrEmpty(shiftInfo.ShiftName)
-                            && !shiftInfo.ShiftName.Equals("休息")
+                            && !shiftInfo.ShiftName.Equals(currentRules.RestShiftName)
                         )
                         {
                             // Only count working staff (not rest days)
-                            totalWorking += halfDayShifts.Contains(shiftInfo.ShiftName) ? 0.5 : 1.0;
+                            totalWorking += 1.0;
                         }
                     }
                 }
@@ -774,6 +796,11 @@ namespace SchedulingApp.ViewModels
                     {
                         allShiftTypes.Add(staffRow.DateShifts[dateHeader].ShiftName);
                     }
+                    else if (staffRow.DateShifts.ContainsKey(dateHeader))
+                    {
+                        // Add rest shift for empty shifts to ensure proper statistics calculation
+                        allShiftTypes.Add(RulesHelper.GetRestShiftName());
+                    }
                 }
             }
 
@@ -801,37 +828,43 @@ namespace SchedulingApp.ViewModels
                     if (staffRow.DateShifts.ContainsKey(dateHeader))
                     {
                         var shiftInfo = staffRow.DateShifts[dateHeader];
-                        
-                            // This is a shift assignment
-                            if (staffStat.ShiftCounts.ContainsKey(shiftInfo.ShiftName))
-                            {
-                                staffStat.ShiftCounts[shiftInfo.ShiftName]++;
-                            }
-                            else
-                            {
-                                staffStat.ShiftCounts[shiftInfo.ShiftName] = 1;
-                            }
-                        
+                        var currentRules = _dataService.LoadRules();
+                        var shiftType = string.IsNullOrEmpty(shiftInfo.ShiftName) ? currentRules.RestShiftName : shiftInfo.ShiftName;
+
+                        if (staffStat.ShiftCounts.ContainsKey(shiftType))
+                        {
+                            // Count all shifts as 1 in the general shift counts
+                            staffStat.ShiftCounts[shiftType]++;
+                        }
+                        else
+                        {
+                            staffStat.ShiftCounts[shiftType] = 1;
+                        }
                     }
                 }
 
-                // According to the requirement: "记录每个员工在排班日期区间内的每个班次数量统计，包括休息天数（注意这里半天班记录半天休息，但在班次中还是记录1）"
-                // The rest days calculation should be based on: total days - work days
-                // - Full-day shifts count as 1.0 work day
-                // - Half-day shifts count as 0.5 work day
-                // - Empty shifts (rest days) count as 0 work days (so they remain as rest days)
-                var resetDays = 0.0;
-                foreach(var (key,value) in staffStat.ShiftCounts){
-                    if (halfDayShifts.Contains(key))
-                    {
-                        resetDays += 0.5 * staffStat.ShiftCounts[key];
-                    }
-                }
-
-                foreach(var (key, value) in staffStat.ShiftCounts)
+                var rules = _dataService.LoadRules();
+                // According to the requirement: "在员工班级统计的"休息"中，Rules.HalfDayShifts记作0.5天，其他地方统计都记作1天"
+                // In employee statistics, HalfDayShifts should count as 0.5 days for rest calculation
+                // We need to adjust the rest shift count by considering that half-day shifts count as 0.5 rest day equivalent
+                if (staffStat.ShiftCounts.ContainsKey(rules.RestShiftName))
                 {
-                    if (key.Equals("休息"))
-                        staffStat.ShiftCounts[key] += resetDays;
+                    double currentRestCount = staffStat.ShiftCounts[rules.RestShiftName];
+                    double halfDayShiftAdjustment = 0.0;
+
+                    // For each half-day shift worked, add 0.5 to the rest equivalent count
+                    foreach (var kvp in staffStat.ShiftCounts)
+                    {
+                        if (halfDayShifts.Contains(kvp.Key) && !kvp.Key.Equals(rules.RestShiftName))
+                        {
+                            // Each half-day shift is equivalent to 0.5 rest day in the calculation
+                            halfDayShiftAdjustment += kvp.Value * 0.5;
+                        }
+                    }
+
+                    // Update the rest count to include the half-day shift equivalent
+                    // This reflects that someone who works half-day shifts effectively has more rest time
+                    staffStat.ShiftCounts[rules.RestShiftName] = currentRestCount + halfDayShiftAdjustment;
                 }
 
                 StaffStatistics.Add(staffStat);

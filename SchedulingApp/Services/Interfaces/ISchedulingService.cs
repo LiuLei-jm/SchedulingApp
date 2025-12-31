@@ -1,4 +1,5 @@
 using SchedulingApp.Models;
+using SchedulingApp.Services.Implementations;
 
 namespace SchedulingApp.Services.Interfaces
 {

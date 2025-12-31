@@ -9,7 +9,7 @@ namespace SchedulingApp.Models
         private string _shiftName = string.Empty;
 
         [ObservableProperty]
-        private int _requiredCount;
+        private int? _requiredCount;
 
         [ObservableProperty]
         private int? _priority; // null means lowest priority (treated as highest number when sorted)
@@ -27,7 +27,7 @@ namespace SchedulingApp.Models
                 }
                 else if (columnName == nameof(RequiredCount))
                 {
-                    if (RequiredCount < 0)
+                    if (RequiredCount.HasValue && RequiredCount < 0)
                         return "需求数量不能为负数";
                 }
                 else if (columnName == nameof(Priority))
