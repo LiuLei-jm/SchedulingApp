@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HandyControl.Controls;
+using SchedulingApp.Helpers;
 using SchedulingApp.Models;
 using SchedulingApp.Services.Interfaces;
 using System.Collections.ObjectModel;
@@ -696,7 +697,7 @@ namespace SchedulingApp.ViewModels
             // Add rest days statistics (empty shifts) - only add this if there are rest days
             var restStat = new DailyShiftStats
             {
-                ShiftType = "休息",
+                ShiftType = RulesHelper.GetRestShiftName(),
                 DateCounts = new Dictionary<string, double>(),
             };
 
@@ -735,9 +736,10 @@ namespace SchedulingApp.ViewModels
                     if (staffRow.DateShifts.ContainsKey(dateHeader))
                     {
                         var shiftInfo = staffRow.DateShifts[dateHeader];
+                        var currentRules = _dataService.LoadRules();
                         if (
                             !string.IsNullOrEmpty(shiftInfo.ShiftName)
-                            && !shiftInfo.ShiftName.Equals("休息")
+                            && !shiftInfo.ShiftName.Equals(currentRules.RestShiftName)
                         )
                         {
                             // Only count working staff (not rest days)
@@ -796,8 +798,8 @@ namespace SchedulingApp.ViewModels
                     }
                     else if (staffRow.DateShifts.ContainsKey(dateHeader))
                     {
-                        // Add "休息" for empty shifts to ensure proper statistics calculation
-                        allShiftTypes.Add("休息");
+                        // Add rest shift for empty shifts to ensure proper statistics calculation
+                        allShiftTypes.Add(RulesHelper.GetRestShiftName());
                     }
                 }
             }
@@ -826,7 +828,8 @@ namespace SchedulingApp.ViewModels
                     if (staffRow.DateShifts.ContainsKey(dateHeader))
                     {
                         var shiftInfo = staffRow.DateShifts[dateHeader];
-                        var shiftType = string.IsNullOrEmpty(shiftInfo.ShiftName) ? "休息" : shiftInfo.ShiftName;
+                        var currentRules = _dataService.LoadRules();
+                        var shiftType = string.IsNullOrEmpty(shiftInfo.ShiftName) ? currentRules.RestShiftName : shiftInfo.ShiftName;
 
                         if (staffStat.ShiftCounts.ContainsKey(shiftType))
                         {
@@ -840,18 +843,19 @@ namespace SchedulingApp.ViewModels
                     }
                 }
 
+                var rules = _dataService.LoadRules();
                 // According to the requirement: "在员工班级统计的"休息"中，Rules.HalfDayShifts记作0.5天，其他地方统计都记作1天"
                 // In employee statistics, HalfDayShifts should count as 0.5 days for rest calculation
-                // We need to adjust the "休息" count by considering that half-day shifts count as 0.5 rest day equivalent
-                if (staffStat.ShiftCounts.ContainsKey("休息"))
+                // We need to adjust the rest shift count by considering that half-day shifts count as 0.5 rest day equivalent
+                if (staffStat.ShiftCounts.ContainsKey(rules.RestShiftName))
                 {
-                    double currentRestCount = staffStat.ShiftCounts["休息"];
+                    double currentRestCount = staffStat.ShiftCounts[rules.RestShiftName];
                     double halfDayShiftAdjustment = 0.0;
 
                     // For each half-day shift worked, add 0.5 to the rest equivalent count
                     foreach (var kvp in staffStat.ShiftCounts)
                     {
-                        if (halfDayShifts.Contains(kvp.Key) && !kvp.Key.Equals("休息"))
+                        if (halfDayShifts.Contains(kvp.Key) && !kvp.Key.Equals(rules.RestShiftName))
                         {
                             // Each half-day shift is equivalent to 0.5 rest day in the calculation
                             halfDayShiftAdjustment += kvp.Value * 0.5;
@@ -860,7 +864,7 @@ namespace SchedulingApp.ViewModels
 
                     // Update the rest count to include the half-day shift equivalent
                     // This reflects that someone who works half-day shifts effectively has more rest time
-                    staffStat.ShiftCounts["休息"] = currentRestCount + halfDayShiftAdjustment;
+                    staffStat.ShiftCounts[rules.RestShiftName] = currentRestCount + halfDayShiftAdjustment;
                 }
 
                 StaffStatistics.Add(staffStat);

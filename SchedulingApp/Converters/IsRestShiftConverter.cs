@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Media;
+using SchedulingApp.Helpers;
 
 namespace SchedulingApp.Converters
 {
@@ -10,7 +11,7 @@ namespace SchedulingApp.Converters
         {
             if (value is string shiftName)
             {
-                return shiftName == "休息" ? new SolidColorBrush(Colors.LightGray) : System.Windows.Media.Brushes.Transparent;
+                return shiftName == RulesHelper.GetRestShiftName() ? new SolidColorBrush(Colors.LightGray) : System.Windows.Media.Brushes.Transparent;
             }
             return System.Windows.Media.Brushes.Transparent; // Default to transparent if value is not a string
         }

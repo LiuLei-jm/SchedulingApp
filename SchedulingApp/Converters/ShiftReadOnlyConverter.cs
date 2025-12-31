@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Windows.Data;
+using SchedulingApp.Helpers;
 
 namespace SchedulingApp.Converters
 {
@@ -9,7 +10,7 @@ namespace SchedulingApp.Converters
         {
             if (value is string shiftName)
             {
-                return shiftName == "休息";
+                return shiftName == RulesHelper.GetRestShiftName();
             }
             return false;
         }

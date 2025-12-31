@@ -45,9 +45,10 @@ namespace SchedulingApp.ViewModels
                         return;
                     }
 
-                    if (newShift.ShiftName == "休息")
+                    var rules = _dataService.LoadRules();
+                    if (newShift.ShiftName == rules.RestShiftName)
                     {
-                        Growl.ErrorGlobal("无法添加\"休息\"班次，该班次为默认程序值，无法新增");
+                        Growl.ErrorGlobal($"无法添加\"{rules.RestShiftName}\"班次，该班次为默认程序值，无法新增");
                         return;
                     }
 
@@ -74,9 +75,10 @@ namespace SchedulingApp.ViewModels
                     return;
                 }
 
-                if (selectedShift.ShiftName == "休息")
+                var rules = _dataService.LoadRules();
+                if (selectedShift.ShiftName == rules.RestShiftName)
                 {
-                    Growl.ErrorGlobal("无法编辑\"休息\"班次，该班次为默认程序值，无法编辑");
+                    Growl.ErrorGlobal($"无法编辑\"{rules.RestShiftName}\"班次，该班次为默认程序值，无法编辑");
                     return;
                 }
 
@@ -139,10 +141,11 @@ namespace SchedulingApp.ViewModels
                 {
                     if (item is ShiftModel shift)
                     {
-                        // Check if any of the selected shifts is "休息", if so, prevent deletion
-                        if (shift.ShiftName == "休息")
+                        var rules = _dataService.LoadRules();
+                        // Check if any of the selected shifts is rest shift, if so, prevent deletion
+                        if (shift.ShiftName == rules.RestShiftName)
                         {
-                            Growl.ErrorGlobal("无法删除\"休息\"班次，该班次为默认程序值，无法删除");
+                            Growl.ErrorGlobal($"无法删除\"{rules.RestShiftName}\"班次，该班次为默认程序值，无法删除");
                             return;
                         }
                         shiftToDelete.Add(shift);

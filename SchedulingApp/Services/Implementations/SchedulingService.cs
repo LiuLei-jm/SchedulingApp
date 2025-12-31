@@ -1,3 +1,4 @@
+using SchedulingApp.Helpers;
 using SchedulingApp.Models;
 using SchedulingApp.Services.Interfaces;
 using System.Windows;
@@ -22,9 +23,9 @@ namespace SchedulingApp.Services.Implementations
 
     public class SchedulingService : ISchedulingService
     {
-        private readonly DataService _dataService;
+        private readonly IDataService _dataService;
 
-        public SchedulingService(DataService dataService)
+        public SchedulingService(IDataService dataService)
         {
             _dataService = dataService;
         }
@@ -426,7 +427,7 @@ namespace SchedulingApp.Services.Implementations
                             }
                             else
                             {
-                                scheduleData[personName].Shifts[dateStr] = "休息";
+                                scheduleData[personName].Shifts[dateStr] = rules.RestShiftName;
                             }
                             // Update statistics
                             UpdateStatisticsAfterAssignment(
@@ -601,7 +602,7 @@ namespace SchedulingApp.Services.Implementations
                     var dateStr = date.ToString("yyyy-MM-dd");
                     var shiftType = scheduleData[personName].Shifts[dateStr];
 
-                    if (shiftType == "休息")
+                    if (shiftType == rules.RestShiftName)
                     {
                         personRestDays[personName]++;
                     }
@@ -625,7 +626,7 @@ namespace SchedulingApp.Services.Implementations
                     var dateStr = date.ToString("yyyy-MM-dd");
                     var shiftType = scheduleData[personName].Shifts[dateStr];
 
-                    if (shiftType == "休息")
+                    if (shiftType == rules.RestShiftName)
                     {
                         currentRestDayEquivalents += 1.0; // Full rest day
                     }
@@ -659,7 +660,7 @@ namespace SchedulingApp.Services.Implementations
                 int currentDailyRestCount = 0;
                 foreach (var person in applicableStaff)
                 {
-                    if (scheduleData[person.Name].Shifts[dateStr] == "休息")
+                    if (scheduleData[person.Name].Shifts[dateStr] == rules.RestShiftName)
                     {
                         currentDailyRestCount++;
                     }
@@ -704,7 +705,7 @@ namespace SchedulingApp.Services.Implementations
                     {
                         var dStr = d.ToString("yyyy-MM-dd");
                         var shift = scheduleData[x.PersonName].Shifts[dStr];
-                        if (shift == "休息")
+                        if (shift == rules.RestShiftName)
                             totalCurrentRest++;
                         if(rules.HalfDayShifts.Contains(shift))
                             totalCurrentRest += 0.5;
@@ -725,7 +726,7 @@ namespace SchedulingApp.Services.Implementations
                     {
                         var dStr = d.ToString("yyyy-MM-dd");
                         var shift = scheduleData[personName].Shifts[dStr];
-                        if (shift == "休息")
+                        if (shift == rules.RestShiftName)
                             currentPersonRestCount++;
                         else if(rules.HalfDayShifts.Contains(shift))
                             currentPersonRestCount += 0.5;
@@ -734,10 +735,10 @@ namespace SchedulingApp.Services.Implementations
                     if (currentPersonRestCount < required)
                     {
                         // 分配休息
-                        scheduleData[personName].Shifts[dateStr] = "休息";
+                        scheduleData[personName].Shifts[dateStr] = rules.RestShiftName;
                         UpdateStatisticsAfterAssignment(
                             personName,
-                            "休息",
+                            rules.RestShiftName,
                             dateStr,
                             rules,
                             scheduleData,
@@ -758,7 +759,7 @@ namespace SchedulingApp.Services.Implementations
                 {
                     var dateStr = date.ToString("yyyy-MM-dd");
                     var shift = scheduleData[personName].Shifts[dateStr];
-                    if (shift == "休息")
+                    if (shift == rules.RestShiftName)
                     {
                         actualRestDays++;
                     }
@@ -777,11 +778,11 @@ namespace SchedulingApp.Services.Implementations
                         var dateStr = date.ToString("yyyy-MM-dd");
                         var currentShift = scheduleData[personName].Shifts[dateStr];
 
-                        if (!string.IsNullOrEmpty(currentShift) && currentShift != "休息")
+                        if (!string.IsNullOrEmpty(currentShift) && currentShift != rules.RestShiftName)
                         {
                             // 尝试转换此日为休息日，但需要检查约束
                             var tempSchedule = new Dictionary<string, string>(scheduleData[personName].Shifts);
-                            tempSchedule[dateStr] = "休息";
+                            tempSchedule[dateStr] = rules.RestShiftName;
 
                             if (CheckMaxConsecutiveDaysConstraint(
                                 tempSchedule,
@@ -799,10 +800,10 @@ namespace SchedulingApp.Services.Implementations
                     foreach (var date in candidateDates.Take(neededRestDays))
                     {
                         var dateStr = date.ToString("yyyy-MM-dd");
-                        scheduleData[personName].Shifts[dateStr] = "休息";
+                        scheduleData[personName].Shifts[dateStr] = rules.RestShiftName;
                         UpdateStatisticsAfterAssignment(
                             personName,
-                            "休息",
+                            rules.RestShiftName,
                             dateStr,
                             rules,
                             scheduleData,
@@ -904,7 +905,7 @@ namespace SchedulingApp.Services.Implementations
                 {
                     staffStats[person.Name].ShiftCounts[shift.ShiftName] = 0;
                 }
-                staffStats[person.Name].ShiftCounts["休息"] = 0;
+                staffStats[person.Name].ShiftCounts[rules.RestShiftName] = 0;
             }
 
             foreach (var date in dateRange)
@@ -923,7 +924,7 @@ namespace SchedulingApp.Services.Implementations
                 {
                     dailyStats[dateStr].ShiftCounts[shift.ShiftName] = 0;
                 }
-                dailyStats[dateStr].ShiftCounts["休息"] = 0;
+                dailyStats[dateStr].ShiftCounts[rules.RestShiftName] = 0;
             }
 
             // Process each date independently
@@ -1119,7 +1120,7 @@ namespace SchedulingApp.Services.Implementations
                         if (
                             scheduleData.ContainsKey(personName)
                             && scheduleData[personName].Shifts.ContainsKey(checkDateStr)
-                            && scheduleData[personName].Shifts[checkDateStr] == "休息"
+                            && scheduleData[personName].Shifts[checkDateStr] == rules.RestShiftName
                         )
                         {
                             currentRestDays++;
@@ -1132,7 +1133,7 @@ namespace SchedulingApp.Services.Implementations
                     {
                         foreach (var kvp in existingSchedule[personName])
                         {
-                            if (kvp.Value == "休息")
+                            if (kvp.Value == rules.RestShiftName)
                             {
                                 existingRestDays++;
                             }
@@ -1143,10 +1144,10 @@ namespace SchedulingApp.Services.Implementations
                     if (currentRestDays + existingRestDays < rules.TotalRestDays)
                     {
                         // Can assign a rest day
-                        scheduleData[personName].Shifts[dateStr] = "休息";
+                        scheduleData[personName].Shifts[dateStr] = rules.RestShiftName;
                         UpdateStatisticsAfterAssignment(
                             personName,
-                            "休息",
+                            rules.RestShiftName,
                             dateStr,
                             rules,
                             scheduleData,
@@ -1212,10 +1213,10 @@ namespace SchedulingApp.Services.Implementations
                         // If no non-priority shift could be assigned, assign rest anyway (but this should be rare)
                         if (!shiftAssigned)
                         {
-                            scheduleData[personName].Shifts[dateStr] = "休息";
+                            scheduleData[personName].Shifts[dateStr] = rules.RestShiftName;
                             UpdateStatisticsAfterAssignment(
                                 personName,
-                                "休息",
+                                rules.RestShiftName,
                                 dateStr,
                                 rules,
                                 scheduleData,
@@ -1280,7 +1281,7 @@ namespace SchedulingApp.Services.Implementations
             }
 
             // Check consecutive work days including existing schedule before start date
-            if (shift != "休息")
+            if (shift != rules.RestShiftName)
             {
                 // Create a temporary schedule to test the assignment
                 var tempScheduleData = new Dictionary<string, ScheduleDataModel>();
@@ -1435,7 +1436,7 @@ namespace SchedulingApp.Services.Implementations
         // Helper method to check if a shift is a rest day
         private bool IsRestShift(string shift)
         {
-            return shift == "休息" || shift == "休";
+            return shift == RulesHelper.GetRestShiftName() || shift == "休";
         }
 
         private int NextFiveDaysWorkConsecutive(
@@ -1518,7 +1519,7 @@ namespace SchedulingApp.Services.Implementations
                     currentEmptyConsecutive += 1;
                     lastAssignedDate = currentDate;
                 }
-                else if (assignedShift != "休息" && assignedShift != "休")
+                else if (assignedShift != rules.RestShiftName && assignedShift != "休")
                 {
                     if (
                         lastAssignedDate.HasValue
@@ -1585,7 +1586,7 @@ namespace SchedulingApp.Services.Implementations
                 {
                     // For half-day shifts, count as 0.5 for work day calculations
                     double shiftDayValue = GetShiftDayValue(shiftType, rules);
-                    staffStats[personName].ShiftCounts["休息"] += shiftDayValue;
+                    staffStats[personName].ShiftCounts[rules.RestShiftName] += shiftDayValue;
                 }
             }
 
@@ -1626,7 +1627,7 @@ namespace SchedulingApp.Services.Implementations
                     if (
                         scheduleData.ContainsKey(personName)
                         && scheduleData[personName].Shifts.ContainsKey(dateStr)
-                        && scheduleData[personName].Shifts[dateStr] == "休息"
+                        && scheduleData[personName].Shifts[dateStr] == rules.RestShiftName
                     )
                     {
                         currentRestDays++;
@@ -1647,7 +1648,7 @@ namespace SchedulingApp.Services.Implementations
                         if (
                             scheduleData.ContainsKey(personName)
                             && scheduleData[personName].Shifts.ContainsKey(dateStr)
-                            && scheduleData[personName].Shifts[dateStr] != "休息"
+                            && scheduleData[personName].Shifts[dateStr] != rules.RestShiftName
                             && !string.IsNullOrEmpty(scheduleData[personName].Shifts[dateStr])
                         )
                         {
@@ -1666,7 +1667,7 @@ namespace SchedulingApp.Services.Implementations
                         var originalShift = scheduleData[personName].Shifts[dateStr];
 
                         // Temporarily change to rest day to test the constraint
-                        scheduleData[personName].Shifts[dateStr] = "休息";
+                        scheduleData[personName].Shifts[dateStr] = rules.RestShiftName;
 
                         // Check if this change violates MaxConsecutiveDays constraint
                         if (
@@ -1753,10 +1754,10 @@ namespace SchedulingApp.Services.Implementations
                 else
                 {
                     // If not in schedule, consider as rest day
-                    assignedShift = "休息";
+                    assignedShift = RulesHelper.GetRestShiftName();
                 }
 
-                if (assignedShift != "休息" && !string.IsNullOrEmpty(assignedShift))
+                if (assignedShift != RulesHelper.GetRestShiftName() && !string.IsNullOrEmpty(assignedShift))
                 {
                     // Check if this date is consecutive to the previous
                     if (i > 0 && date.Date == sortedDates[i - 1].AddDays(1).Date)
@@ -1810,7 +1811,7 @@ namespace SchedulingApp.Services.Implementations
                             && scheduleData[personName].Shifts.ContainsKey(currentDateStr)
                             && scheduleData[personName].Shifts[currentDateStr] == halfDayShift
                             && scheduleData[personName].Shifts.ContainsKey(nextDateStr)
-                            && scheduleData[personName].Shifts[nextDateStr] == "休息"
+                            && scheduleData[personName].Shifts[nextDateStr] == rules.RestShiftName
                         )
                         {
                             // Look for another person who has a work shift on the next day
@@ -1821,7 +1822,7 @@ namespace SchedulingApp.Services.Implementations
                                     otherPersonName != personName
                                     && scheduleData.ContainsKey(otherPersonName)
                                     && scheduleData[otherPersonName].Shifts.ContainsKey(nextDateStr)
-                                    && scheduleData[otherPersonName].Shifts[nextDateStr] != "休息"
+                                    && scheduleData[otherPersonName].Shifts[nextDateStr] != rules.RestShiftName
                                     && scheduleData[otherPersonName].Shifts[nextDateStr]
                                         != halfDayShift
                                 )
@@ -1842,7 +1843,7 @@ namespace SchedulingApp.Services.Implementations
 
                                     // Apply potential swap
                                     tempSchedulePerson[nextDateStr] = halfDayShift; // Person gets consecutive half-day
-                                    tempScheduleOther[nextDateStr] = "休息"; // Other person gets rest day
+                                    tempScheduleOther[nextDateStr] = rules.RestShiftName; // Other person gets rest day
 
                                     // Check constraints for both people
                                     bool personValid = CheckMaxConsecutiveDaysConstraint(
@@ -1866,7 +1867,7 @@ namespace SchedulingApp.Services.Implementations
                                             scheduleData[personName].Shifts[nextDateStr] =
                                                 halfDayShift;
                                             scheduleData[otherPersonName].Shifts[nextDateStr] =
-                                                "休息";
+                                                rules.RestShiftName;
                                         }
                                     }
                                 }

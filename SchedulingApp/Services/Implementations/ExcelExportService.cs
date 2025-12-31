@@ -6,6 +6,13 @@ namespace SchedulingApp.Services.Implementations
 {
     public class ExcelExportService : IExcelExportService
     {
+        private readonly IDataService _dataService;
+
+        public ExcelExportService(IDataService dataService)
+        {
+            _dataService = dataService;
+        }
+
         public void ExportScheduleToExcel(Dictionary<string, List<ScheduleExportModel>> schedule, string filePath, DateTime startDate, DateTime endDate)
         {
             using var workbook = new XLWorkbook();
@@ -137,10 +144,11 @@ namespace SchedulingApp.Services.Implementations
                 }
             }
 
-            // Also include "休息" as a special shift type for statistics
-            if (!allShiftTypes.Contains("休息"))
+            // Also include rest shift as a special shift type for statistics
+            var rules = _dataService.LoadRules();
+            if (!allShiftTypes.Contains(rules.RestShiftName))
             {
-                allShiftTypes.Add("休息");
+                allShiftTypes.Add(rules.RestShiftName);
             }
 
             // Add employee shift statistics to the RIGHT of the schedule data

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Windows.Data;
 using System.Windows;
+using SchedulingApp.Helpers;
 
 namespace SchedulingApp.Converters
 {
@@ -10,7 +11,7 @@ namespace SchedulingApp.Converters
         {
             if (value is string shiftName)
             {
-                return shiftName == "休息" ? FontStyles.Italic : FontStyles.Normal;
+                return shiftName == RulesHelper.GetRestShiftName() ? FontStyles.Italic : FontStyles.Normal;
             }
             return FontStyles.Normal; // Default to normal style if value is not a string
         }

@@ -1,3 +1,4 @@
+using SchedulingApp.Helpers;
 using SchedulingApp.Models;
 using SchedulingApp.Services.Interfaces;
 using System.IO;
@@ -105,12 +106,13 @@ namespace SchedulingApp.Services.Implementations
                 };
             }
 
-            // Always add "休息" as a default shift that should not be saved to the file
-            if (!loadedShifts.Any(s => s.ShiftName == "休息"))
+            // Always add rest shift as a default shift that should not be saved to the file
+            var rules = LoadRules();
+            if (!loadedShifts.Any(s => s.ShiftName == rules.RestShiftName))
             {
                 loadedShifts.Add(new ShiftModel
                 {
-                    ShiftName = "休息",
+                    ShiftName = rules.RestShiftName,
                     StartTime = "",
                     EndTime = "",
                     Color = "#D3D3D3",
@@ -122,8 +124,9 @@ namespace SchedulingApp.Services.Implementations
 
         public void SaveShifts(List<ShiftModel> shifts)
         {
-            // Filter out the "休息" shift since it should be a default program value that's not persisted
-            var shiftsToSave = shifts.Where(s => s.ShiftName != "休息").ToList();
+            // Filter out the rest shift since it should be a default program value that's not persisted
+            var rules = LoadRules();
+            var shiftsToSave = shifts.Where(s => s.ShiftName != rules.RestShiftName).ToList();
 
             var options = new JsonSerializerOptions
             {
@@ -136,19 +139,27 @@ namespace SchedulingApp.Services.Implementations
 
         public RulesModel LoadRules()
         {
+            RulesModel rules;
             if (File.Exists(_rulesFile))
             {
                 var json = File.ReadAllText(_rulesFile);
-                var rules = JsonSerializer.Deserialize<RulesModel>(json);
-                return rules ?? new RulesModel();
+                rules = JsonSerializer.Deserialize<RulesModel>(json);
+                rules = rules ?? new RulesModel();
+            }
+            else
+            {
+                // 默认规则数据
+                rules = new RulesModel
+                {
+                    MaxConsecutiveDays = 5,
+                    TotalRestDays = 4,
+                };
             }
 
-            // 默认规则数据
-            return new RulesModel
-            {
-                MaxConsecutiveDays = 5,
-                TotalRestDays = 4,
-            };
+            // Update RulesHelper with current rules
+            RulesHelper.CurrentRules = rules;
+
+            return rules;
         }
 
         public void SaveRules(RulesModel rules)
@@ -160,6 +171,9 @@ namespace SchedulingApp.Services.Implementations
             };
             var json = JsonSerializer.Serialize(rules, options);
             File.WriteAllText(_rulesFile, json);
+
+            // Update RulesHelper with current rules
+            RulesHelper.CurrentRules = rules;
         }
 
         public string ScheduleFile => _scheduleFile;

@@ -8,6 +8,7 @@ namespace SchedulingApp.Models
         public ObservableCollection<string> CustomHolidays { get; set; } = [];
         public ObservableCollection<string> HalfDayShifts { get; set; } = [];
         public int TotalRestDays { get; set; } = 4;
+        public string RestShiftName { get; set; } = "休息";
 
         // Old properties for backward compatibility
         public ObservableCollection<ShiftRequirementModel> Weekday { get; set; } = new ObservableCollection<ShiftRequirementModel>();
