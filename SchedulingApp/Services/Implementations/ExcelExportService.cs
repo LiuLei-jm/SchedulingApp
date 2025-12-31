@@ -194,7 +194,49 @@ namespace SchedulingApp.Services.Implementations
                             dateColumnsFormula += "+";
                         dateColumnsFormula += $"(A2:A{rowIndex-1}=\"{staffName}\")*({colLetter}2:{colLetter}{rowIndex-1}=\"{shiftType}\")";
                     }
-                    var formula = "=SUMPRODUCT(" + dateColumnsFormula + ")";
+
+                    // Check if this shift type is a rest shift ("休息" or "休")
+                    var exportRules = _dataService.LoadRules();
+                    var isRestShift = shiftType == exportRules.RestShiftName || shiftType == "休";
+
+                    string formula;
+                    if (isRestShift)
+                    {
+                        // For rest shifts, we also need to add half-day shifts multiplied by 0.5
+                        string halfDayFormula = "";
+                        var halfDayShifts = exportRules.HalfDayShifts.ToList();
+
+                        foreach (var halfDayShift in halfDayShifts)
+                        {
+                            // Create formula for each half-day shift for this staff member
+                            string halfDayShiftFormula = "";
+                            for (int dateCol = 4; dateCol < colIndex; dateCol++)
+                            {
+                                var colLetter = GetExcelColumnName(dateCol);
+                                if (halfDayShiftFormula != "")
+                                    halfDayShiftFormula += "+";
+                                halfDayShiftFormula += $"(A2:A{rowIndex-1}=\"{staffName}\")*({colLetter}2:{colLetter}{rowIndex-1}=\"{halfDayShift}\")";
+                            }
+
+                            if (halfDayFormula != "")
+                                halfDayFormula += "+";
+                            halfDayFormula += "0.5*SUMPRODUCT(" + halfDayShiftFormula + ")";
+                        }
+
+                        // Combine the main rest shift formula with the half-day shift contribution
+                        if (!string.IsNullOrEmpty(halfDayFormula))
+                        {
+                            formula = "SUMPRODUCT(" + dateColumnsFormula + ")+(" + halfDayFormula + ")";
+                        }
+                        else
+                        {
+                            formula = "=SUMPRODUCT(" + dateColumnsFormula + ")";
+                        }
+                    }
+                    else
+                    {
+                        formula = "=SUMPRODUCT(" + dateColumnsFormula + ")";
+                    }
 
                     worksheet.Cell(empStatsRow, shiftTypeCol).FormulaA1 = formula;
                     shiftTypeCol++;

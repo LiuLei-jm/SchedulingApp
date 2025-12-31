@@ -750,11 +750,12 @@ namespace SchedulingApp.Services.Implementations
                 }
             }
 
-            // 最后检查是否所有员工都达到了最低休息天数要求
+            // 最后检查是否所有员工都达到了最低休息天数要求，并优化连续工作天数
             foreach (var person in applicableStaff)
             {
                 var personName = person.Name;
 
+                // First, ensure each employee has at least the required number of rest days
                 // Calculate current rest days for this person (full rest days + half days as 0.5)
                 double currentRestDays = 0;
                 foreach (var date in dateRange)
@@ -772,119 +773,368 @@ namespace SchedulingApp.Services.Implementations
                 }
 
                 // Check if the person already meets the required rest days
-                if (currentRestDays >= rules.TotalRestDays)
+                double neededRestDays = Math.Max(0, rules.TotalRestDays - currentRestDays);
+
+                // First, try to assign additional rest days if needed
+                if (neededRestDays > 0)
                 {
-                    continue; // This person already meets the requirement
-                }
+                    // Find candidate dates to convert to rest days
+                    // These are dates that are currently empty or have non-priority shifts
+                    var candidateDates = new List<(DateTime date, double currentRestCount)>();
 
-                // Calculate how many more rest days are needed
-                double neededRestDays = rules.TotalRestDays - currentRestDays;
-
-                // Find candidate dates to convert to rest days
-                // These are dates that are currently empty or have non-priority shifts
-                var candidateDates = new List<(DateTime date, double currentRestCount)>();
-
-                foreach (var date in dateRange)
-                {
-                    var dateStr = date.ToString("yyyy-MM-dd");
-                    var currentShift = scheduleData[personName].Shifts[dateStr];
-
-                    // Empty shifts ("") and shifts that have no priority (not in schedulingRule priority shifts)
-                    // can be converted to rest
-                    bool canConvertToRest = string.IsNullOrEmpty(currentShift) || currentShift == "";
-
-                    if (!canConvertToRest)
+                    foreach (var date in dateRange)
                     {
-                        // Check all scheduling rules to see if any of them define this shift as non-priority
-                        foreach (var rule in rules.SchedulingRules)
+                        var dateStr = date.ToString("yyyy-MM-dd");
+                        var currentShift = scheduleData[personName].Shifts[dateStr];
+
+                        // Empty shifts ("") and shifts that have no priority (not in schedulingRule priority shifts)
+                        // can be converted to rest
+                        bool canConvertToRest = string.IsNullOrEmpty(currentShift) || currentShift == "";
+
+                        if (!canConvertToRest)
                         {
-                            var dateStrForCheck = date.ToString("yyyy-MM-dd");
-                            var isHoliday = IsHoliday(date, rules);
-
-                            // Get the appropriate shifts based on whether it's a holiday or not
-                            var applicableShifts = isHoliday ? rule.HolidayShifts : rule.WeekdayShifts;
-
-                            var shiftRequirement = applicableShifts.FirstOrDefault(s => s.ShiftName == currentShift);
-
-                            if (shiftRequirement != null && !shiftRequirement.Priority.HasValue)
+                            // Check all scheduling rules to see if any of them define this shift as non-priority
+                            foreach (var rule in rules.SchedulingRules)
                             {
-                                canConvertToRest = true;
-                                break;
-                            }
-                        }
-                    }
+                                var dateStrForCheck = date.ToString("yyyy-MM-dd");
+                                var isHoliday = IsHoliday(date, rules);
 
-                    if (canConvertToRest)
-                    {
-                        // Count how many people are already resting on this day (for optimization)
-                        double dailyRestCount = 0;
-                        foreach (var p in applicableStaff)
-                        {
-                            var pName = p.Name;
-                            var pShift = scheduleData[pName].Shifts[dateStr];
-                            if (pShift == rules.RestShiftName)
-                            {
-                                dailyRestCount++;
-                            }
-                            else if (rules.HalfDayShifts.Contains(pShift))
-                            {
-                                dailyRestCount += 0.5;
+                                // Get the appropriate shifts based on whether it's a holiday or not
+                                var applicableShifts = isHoliday ? rule.HolidayShifts : rule.WeekdayShifts;
+
+                                var shiftRequirement = applicableShifts.FirstOrDefault(s => s.ShiftName == currentShift);
+
+                                if (shiftRequirement != null && !shiftRequirement.Priority.HasValue)
+                                {
+                                    canConvertToRest = true;
+                                    break;
+                                }
                             }
                         }
 
-                        candidateDates.Add((date, dailyRestCount));
+                        if (canConvertToRest)
+                        {
+                            // Count how many people are already resting on this day (for optimization)
+                            double dailyRestCount = 0;
+                            foreach (var p in applicableStaff)
+                            {
+                                var pName = p.Name;
+                                var pShift = scheduleData[pName].Shifts[dateStr];
+                                if (pShift == rules.RestShiftName)
+                                {
+                                    dailyRestCount++;
+                                }
+                                else if (rules.HalfDayShifts.Contains(pShift))
+                                {
+                                    dailyRestCount += 0.5;
+                                }
+                            }
+
+                            candidateDates.Add((date, dailyRestCount));
+                        }
+                    }
+
+                    // Sort candidate dates by rest count (ascending) - prioritize days with fewer rest assignments
+                    candidateDates = candidateDates.OrderBy(cd => cd.currentRestCount).ToList();
+
+                    // Convert candidate dates to rest, considering the MaxConsecutiveDays constraint
+                    foreach (var (date, _) in candidateDates)
+                    {
+                        if (neededRestDays <= 0) break; // Requirement met
+
+                        var dateStr = date.ToString("yyyy-MM-dd");
+                        var currentShift = scheduleData[personName].Shifts[dateStr]; // Get current shift value for this date
+
+                        // Create a temporary schedule to test the assignment
+                        var tempSchedule = new Dictionary<string, string>(scheduleData[personName].Shifts);
+                        tempSchedule[dateStr] = rules.RestShiftName;
+
+                        // Check if this assignment violates the MaxConsecutiveDays constraint
+                        if (CheckMaxConsecutiveDaysConstraint(
+                            tempSchedule,
+                            rules.MaxConsecutiveDays,
+                            dateRange,
+                            personName,
+                            existingSchedule))
+                        {
+                            // Assign this day as rest
+                            scheduleData[personName].Shifts[dateStr] = rules.RestShiftName;
+
+                            // Update statistics
+                            UpdateStatisticsAfterAssignment(
+                                personName,
+                                rules.RestShiftName,
+                                dateStr,
+                                rules,
+                                scheduleData,
+                                staffStats,
+                                dailyStats
+                            );
+
+                            // Update needed rest days based on the type of day we're converting
+                            if (rules.HalfDayShifts.Contains(currentShift))
+                            {
+                                neededRestDays -= 0.5; // If it was a half day shift, we're adding 0.5 to rest
+                            }
+                            else
+                            {
+                                neededRestDays -= 1.0; // If it was empty, we're adding 1 day
+                            }
+                        }
                     }
                 }
 
-                // Sort candidate dates by rest count (ascending) - prioritize days with fewer rest assignments
-                candidateDates = candidateDates.OrderBy(cd => cd.currentRestCount).ToList();
-
-                // Convert candidate dates to rest, considering the MaxConsecutiveDays constraint
-                foreach (var (date, _) in candidateDates)
+                // Second, check if MaxConsecutiveDays constraint is still violated and fix by moving rest days if necessary
+                // Check if the current schedule violates MaxConsecutiveDays constraint for this person
+                var currentSchedule = scheduleData[personName].Shifts;
+                if (!CheckMaxConsecutiveDaysConstraint(
+                    currentSchedule,
+                    rules.MaxConsecutiveDays,
+                    dateRange,
+                    personName,
+                    existingSchedule))
                 {
-                    if (neededRestDays <= 0) break; // Requirement met
-
-                    var dateStr = date.ToString("yyyy-MM-dd");
-                    var currentShift = scheduleData[personName].Shifts[dateStr]; // Get current shift value for this date
-
-                    // Create a temporary schedule to test the assignment
-                    var tempSchedule = new Dictionary<string, string>(scheduleData[personName].Shifts);
-                    tempSchedule[dateStr] = rules.RestShiftName;
-
-                    // Check if this assignment violates the MaxConsecutiveDays constraint
-                    if (CheckMaxConsecutiveDaysConstraint(
-                        tempSchedule,
-                        rules.MaxConsecutiveDays,
+                    // The constraint is violated, so we need to fix it by moving some work days to rest days
+                    // Find the problematic consecutive work day sequences and try to insert rest days
+                    var problematicDates = FindConsecutiveWorkDayIssues(
+                        currentSchedule,
                         dateRange,
                         personName,
-                        existingSchedule))
+                        existingSchedule,
+                        rules
+                    );
+
+                    // Try to resolve the consecutive work day issues by converting some work days to rest days
+                    foreach (var date in problematicDates)
                     {
-                        // Assign this day as rest
-                        scheduleData[personName].Shifts[dateStr] = rules.RestShiftName;
+                        var dateStr = date.ToString("yyyy-MM-dd");
+                        var currentShift = currentSchedule[dateStr];
 
-                        // Update statistics
-                        UpdateStatisticsAfterAssignment(
-                            personName,
-                            rules.RestShiftName,
-                            dateStr,
-                            rules,
-                            scheduleData,
-                            staffStats,
-                            dailyStats
-                        );
+                        // Check if this shift can be converted (is empty or non-priority)
+                        bool canConvert = string.IsNullOrEmpty(currentShift) || currentShift == "";
 
-                        // Update needed rest days based on the type of day we're converting
-                        if (rules.HalfDayShifts.Contains(currentShift))
+                        if (!canConvert && !string.IsNullOrEmpty(currentShift) && currentShift != rules.RestShiftName)
                         {
-                            neededRestDays -= 0.5; // If it was a half day shift, we're adding 0.5 to rest
+                            foreach (var rule in rules.SchedulingRules)
+                            {
+                                var isHoliday = IsHoliday(date, rules);
+                                var applicableShifts = isHoliday ? rule.HolidayShifts : rule.WeekdayShifts;
+                                var shiftRequirement = applicableShifts.FirstOrDefault(s => s.ShiftName == currentShift);
+
+                                if (shiftRequirement != null && !shiftRequirement.Priority.HasValue)
+                                {
+                                    canConvert = true;
+                                    break;
+                                }
+                            }
                         }
-                        else
+
+                        // Check if converting this day to rest would fix the constraint
+                        if (canConvert)
                         {
-                            neededRestDays -= 1.0; // If it was empty, we're adding 1 day
+                            var tempSchedule = new Dictionary<string, string>(currentSchedule);
+                            tempSchedule[dateStr] = rules.RestShiftName;
+
+                            if (CheckMaxConsecutiveDaysConstraint(
+                                tempSchedule,
+                                rules.MaxConsecutiveDays,
+                                dateRange,
+                                personName,
+                                existingSchedule))
+                            {
+                                // Convert this day to rest
+                                scheduleData[personName].Shifts[dateStr] = rules.RestShiftName;
+
+                                // Update statistics
+                                UpdateStatisticsAfterAssignment(
+                                    personName,
+                                    rules.RestShiftName,
+                                    dateStr,
+                                    rules,
+                                    scheduleData,
+                                    staffStats,
+                                    dailyStats
+                                );
+                            }
                         }
                     }
                 }
             }
+        }
+
+        // Helper method to find dates that are part of problematic consecutive work day sequences
+        private List<DateTime> FindConsecutiveWorkDayIssues(
+            Dictionary<string, string> personSchedule,
+            List<DateTime> dateRange,
+            string personName,
+            Dictionary<string, Dictionary<string, string>> existingSchedule,
+            RulesModel rules)
+        {
+            var problematicDates = new List<DateTime>();
+
+            // Create a temporary combined view of the schedule including existing schedule
+            var combinedSchedule = new Dictionary<string, string>();
+
+            // Add existing schedule if provided
+            if (existingSchedule != null && existingSchedule.ContainsKey(personName))
+            {
+                foreach (var kvp in existingSchedule[personName])
+                {
+                    combinedSchedule[kvp.Key] = kvp.Value;
+                }
+            }
+
+            // Add new schedule data
+            foreach (var kvp in personSchedule)
+            {
+                combinedSchedule[kvp.Key] = kvp.Value;
+            }
+
+            // Get a broader date range to check across the boundary
+            var allDates = new List<DateTime>();
+            // Add dates from existing schedule
+            foreach (var kvp in combinedSchedule)
+            {
+                if (DateTime.TryParse(kvp.Key, out DateTime date))
+                {
+                    allDates.Add(date);
+                }
+            }
+            // Add dates from the new date range
+            allDates.AddRange(dateRange);
+
+            // Sort all dates
+            var sortedDates = allDates.OrderBy(d => d).Distinct().ToList();
+
+            var currentConsecutive = 0;
+            var consecutiveStartDates = new List<(DateTime date, double count)>();
+            var consecutiveWorkDays = 0.0;
+
+            for (int i = 0; i < sortedDates.Count; i++)
+            {
+                var date = sortedDates[i];
+                var dateStr = date.ToString("yyyy-MM-dd");
+
+                string assignedShift = "";
+                if (combinedSchedule.ContainsKey(dateStr))
+                {
+                    assignedShift = combinedSchedule[dateStr];
+                }
+                else
+                {
+                    // If not in schedule, consider as rest day
+                    assignedShift = RulesHelper.GetRestShiftName();
+                }
+
+                // Check consecutive work days (not rest days) - the rule is that consecutive work days
+                // should not exceed MaxConsecutiveDays
+                if (assignedShift != RulesHelper.GetRestShiftName() && !string.IsNullOrEmpty(assignedShift))
+                {
+                    // Check if this date is consecutive to the previous
+                    if (i > 0 && date.Date == sortedDates[i - 1].AddDays(1).Date)
+                    {
+                        consecutiveWorkDays += GetShiftDayValue(assignedShift, rules);
+                    }
+                    else
+                    {
+                        // If the previous sequence was problematic, mark the dates for potential adjustment
+                        if (consecutiveWorkDays > rules.MaxConsecutiveDays)
+                        {
+                            // Add dates from the problematic sequence (starting from where we can potentially insert a rest day)
+                            var startIndex = i - (int)consecutiveWorkDays;
+                            if (startIndex < 0) startIndex = 0;
+
+                            // Select middle dates to convert to rest days to break the sequence
+                            var daysToConvert = (int)(consecutiveWorkDays - rules.MaxConsecutiveDays) + 1;
+                            for (int j = startIndex + (int)(consecutiveWorkDays / 2) - daysToConvert / 2;
+                                 j < startIndex + (int)(consecutiveWorkDays / 2) + daysToConvert / 2 && j < i; j++)
+                            {
+                                if (j >= 0 && j < sortedDates.Count)
+                                {
+                                    var checkDate = sortedDates[j];
+                                    var checkDateStr = checkDate.ToString("yyyy-MM-dd");
+
+                                    // Only add if it's in our main date range and isn't already a rest day
+                                    if (dateRange.Contains(checkDate) &&
+                                        personSchedule.ContainsKey(checkDateStr) &&
+                                        personSchedule[checkDateStr] != rules.RestShiftName &&
+                                        !string.IsNullOrEmpty(personSchedule[checkDateStr]))
+                                    {
+                                        problematicDates.Add(checkDate);
+                                    }
+                                }
+                            }
+                        }
+
+                        consecutiveWorkDays = GetShiftDayValue(assignedShift, rules);
+                    }
+                }
+                else
+                {
+                    // If the previous sequence was problematic, mark the dates for potential adjustment
+                    if (consecutiveWorkDays > rules.MaxConsecutiveDays)
+                    {
+                        // Add dates from the problematic sequence (starting from where we can potentially insert a rest day)
+                        var endIndex = i - 1;
+                        var startIndex = endIndex - (int)consecutiveWorkDays + 1;
+                        if (startIndex < 0) startIndex = 0;
+
+                        // Select middle dates to convert to rest days to break the sequence
+                        var daysToConvert = (int)(consecutiveWorkDays - rules.MaxConsecutiveDays) + 1;
+                        for (int j = startIndex + (int)(consecutiveWorkDays / 2) - daysToConvert / 2;
+                             j < startIndex + (int)(consecutiveWorkDays / 2) + daysToConvert / 2 && j <= endIndex; j++)
+                        {
+                            if (j >= 0 && j < sortedDates.Count)
+                            {
+                                var checkDate = sortedDates[j];
+                                var checkDateStr = checkDate.ToString("yyyy-MM-dd");
+
+                                // Only add if it's in our main date range and isn't already a rest day
+                                if (dateRange.Contains(checkDate) &&
+                                    personSchedule.ContainsKey(checkDateStr) &&
+                                    personSchedule[checkDateStr] != rules.RestShiftName &&
+                                    !string.IsNullOrEmpty(personSchedule[checkDateStr]))
+                                {
+                                    problematicDates.Add(checkDate);
+                                }
+                            }
+                        }
+                    }
+
+                    consecutiveWorkDays = 0;
+                }
+            }
+
+            // Handle the last sequence if it was problematic
+            if (consecutiveWorkDays > rules.MaxConsecutiveDays)
+            {
+                var endIndex = sortedDates.Count - 1;
+                var startIndex = endIndex - (int)consecutiveWorkDays + 1;
+                if (startIndex < 0) startIndex = 0;
+
+                // Select middle dates to convert to rest days to break the sequence
+                var daysToConvert = (int)(consecutiveWorkDays - rules.MaxConsecutiveDays) + 1;
+                for (int j = startIndex + (int)(consecutiveWorkDays / 2) - daysToConvert / 2;
+                     j < startIndex + (int)(consecutiveWorkDays / 2) + daysToConvert / 2 && j <= endIndex; j++)
+                {
+                    if (j >= 0 && j < sortedDates.Count)
+                    {
+                        var checkDate = sortedDates[j];
+                        var checkDateStr = checkDate.ToString("yyyy-MM-dd");
+
+                        // Only add if it's in our main date range and isn't already a rest day
+                        if (dateRange.Contains(checkDate) &&
+                            personSchedule.ContainsKey(checkDateStr) &&
+                            personSchedule[checkDateStr] != rules.RestShiftName &&
+                            !string.IsNullOrEmpty(personSchedule[checkDateStr]))
+                        {
+                            problematicDates.Add(checkDate);
+                        }
+                    }
+                }
+            }
+
+            return problematicDates.Distinct().ToList();
         }
 
         // Method to rotate staff for fair distribution
@@ -1458,7 +1708,7 @@ namespace SchedulingApp.Services.Implementations
                     assignedShift = RulesHelper.GetRestShiftName();
                 }
 
-                if (assignedShift != RulesHelper.GetRestShiftName() && assignedShift != "休" && !string.IsNullOrEmpty(assignedShift))
+                if (assignedShift != RulesHelper.GetRestShiftName() && assignedShift != "休")
                 {
                     // Check if this date is consecutive to the previous
                     if (i > 0 && date.Date == sortedDates[i - 1].AddDays(1).Date)
