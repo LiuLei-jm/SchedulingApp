@@ -139,7 +139,7 @@ namespace SchedulingApp.Services.Implementations
 
         public RulesModel LoadRules()
         {
-            RulesModel rules;
+            RulesModel? rules;
             if (File.Exists(_rulesFile))
             {
                 var json = File.ReadAllText(_rulesFile);

@@ -451,9 +451,15 @@ namespace SchedulingApp.ViewModels
                 return;
             }
 
+            if (SelectedRule == null)
+            {
+                Growl.InfoGlobal("请先选择一个规则！");
+                return;
+            }
+
             foreach (var staffObj in staffToRule)
             {
-                if (!SelectedRule.ApplicableStaff.Contains(staffObj.Name))
+                if (!SelectedRule.ApplicableStaff?.Contains(staffObj.Name) ?? true)
                 {
                     // Validation: Ensure each staff member is only in one rule
                     if (IsStaffAlreadyInAnotherRule(staffObj.Name))
@@ -461,7 +467,7 @@ namespace SchedulingApp.ViewModels
                         Growl.WarningGlobal($"员工 {staffObj.Name} 已经在其他规则中，不能重复添加");
                         return;
                     }
-                    SelectedRule.ApplicableStaff.Add(staffObj.Name);
+                    SelectedRule.ApplicableStaff?.Add(staffObj.Name);
                 }
             }
             UpdateAvailableStaffForRule(SelectedRule); // Refresh available staff

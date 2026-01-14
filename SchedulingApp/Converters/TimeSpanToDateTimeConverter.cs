@@ -11,7 +11,7 @@ namespace SchedulingApp.Converters
             var timeSpan = value as TimeSpan?;
             if (timeSpan == null)
             {
-                return null;
+                return null!;
             }
             return DateTime.Today + timeSpan.Value;
         }
@@ -21,7 +21,7 @@ namespace SchedulingApp.Converters
             var dateTime = value as DateTime?;
             if (dateTime == null)
             {
-                return null;
+                return null!;
             }
             return dateTime.Value.TimeOfDay;
         }

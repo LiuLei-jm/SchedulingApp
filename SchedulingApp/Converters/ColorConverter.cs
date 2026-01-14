@@ -34,7 +34,7 @@ namespace SchedulingApp.Converters
             {
                 return brush.Color.ToString();
             }
-            return null;
+            return null!;
         }
     }
 
@@ -45,8 +45,13 @@ namespace SchedulingApp.Converters
 
         public static object ConvertFromString(string colorString)
         {
-            // Fix: Use the static method ConvertFromInvariantString instead of the instance method ConvertFromString
-            return _colorConverter.ConvertFromInvariantString(colorString);
+            // Fix: Ensure a non-null Color is always returned, fallback to Colors.Transparent if null
+            var result = _colorConverter.ConvertFromInvariantString(colorString);
+            if (result is Color color)
+            {
+                return color;
+            }
+            return Colors.Transparent;
         }
     }
 }
