@@ -721,7 +721,10 @@ namespace SchedulingApp.Services.Implementations
                             currentPersonRestCount += 0.5;
                     }
 
-                    if (currentPersonRestCount < required)
+                    if (
+                        currentPersonRestCount < required
+                        && CheckCanAssginRestDay(scheduleData, personName, date, rules)
+                    )
                     {
                         // 分配休息
                         scheduleData[personName].Shifts[dateStr] = rules.RestShiftName;
@@ -824,28 +827,8 @@ namespace SchedulingApp.Services.Implementations
                                 }
                             }
 
-                            var dayBeforeYesterday = date.AddDays(-2);
-                            var dayAfterTomorrow = date.AddDays(2);
-                            var dayBeforeYesterdayStr = dayBeforeYesterday.ToString("yyyy-MM-dd");
-                            var dayAfterTomorrowStr = dayAfterTomorrow.ToString("yyyy-MM-dd");
-                            var dayBeforeYesterdayShift = scheduleData[personName]
-                                .Shifts.ContainsKey(dayBeforeYesterdayStr)
-                                ? scheduleData[personName].Shifts[dayBeforeYesterdayStr]
-                                : null;
-                            var dayAfterTomorrowShift = scheduleData[personName]
-                                .Shifts.ContainsKey(dayAfterTomorrowStr)
-                                ? scheduleData[personName].Shifts[dayAfterTomorrowStr]
-                                : null;
-                            if (
-                                dayBeforeYesterdayShift == rules.RestShiftName
-                                || dayAfterTomorrowShift == rules.RestShiftName
-                                || dayBeforeYesterdayShift == "休"
-                            )
-                            {
-                                continue;
-                            }
-
-                            candidateDates.Add((date, dailyRestCount));
+                            if (CheckCanAssginRestDay(scheduleData, personName, date, rules))
+                                candidateDates.Add((date, dailyRestCount));
                         }
                     }
 
@@ -995,6 +978,30 @@ namespace SchedulingApp.Services.Implementations
                     }
                 }
             }
+        }
+
+        private static bool CheckCanAssginRestDay(
+            Dictionary<string, ScheduleDataModel> scheduleData,
+            string personName,
+            DateTime date,
+            RulesModel rules
+        )
+        {
+            var dayBeforeYesterday = date.AddDays(-2);
+            var dayAfterTomorrow = date.AddDays(2);
+            var dayBeforeYesterdayStr = dayBeforeYesterday.ToString("yyyy-MM-dd");
+            var dayAfterTomorrowStr = dayAfterTomorrow.ToString("yyyy-MM-dd");
+            var dayBeforeYesterdayShift = scheduleData[personName]
+                .Shifts.ContainsKey(dayBeforeYesterdayStr)
+                ? scheduleData[personName].Shifts[dayBeforeYesterdayStr]
+                : null;
+            var dayAfterTomorrowShift = scheduleData[personName]
+                .Shifts.ContainsKey(dayAfterTomorrowStr)
+                ? scheduleData[personName].Shifts[dayAfterTomorrowStr]
+                : null;
+            return dayBeforeYesterdayShift != rules.RestShiftName
+                && dayAfterTomorrowShift != rules.RestShiftName
+                && dayBeforeYesterdayShift != "休";
         }
 
         // Helper method to find dates that are part of problematic consecutive work day sequences
